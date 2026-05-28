@@ -1035,7 +1035,7 @@ function registerIpc() {
    //   "tab":             each line is typed, then {TAB} — good for PDF form fields
    //   "none":            \n is stripped (single-line typing)
    // `lineDelayMs` waits between lines so the editor's cursor/field can advance.
-  ipcMain.handle("desktop:type-text", async (_event, { windowTitle, text, lineBreak, lineDelayMs }) => {
+  ipcMain.handle("desktop:type-text", async (_event, { windowTitle, text, lineBreak, lineDelayMs, charDelayMs }) => {
     if (typeof text !== "string") {
       return { ok: false, error: "Missing text" };
     }
@@ -1075,13 +1075,22 @@ function registerIpc() {
 
     const mode = lineBreak === "tab" ? "tab" : lineBreak === "none" ? "none" : "enter";
     const delay = Number.isFinite(lineDelayMs) ? Math.max(0, Math.min(2000, lineDelayMs)) : 60;
+    const charDelay = Number.isFinite(charDelayMs) ? Math.max(0, Math.min(1000, charDelayMs)) : 15;
 
     // Normalize newlines, then split. \r\n and \r both become \n first.
     const normalized = text.replace(/\r\n?/g, "\n");
     const segments = mode === "none" ? [normalized.replace(/\n/g, "")] : normalized.split("\n");
 
     const lines = [
-      "Add-Type -AssemblyName System.Windows.Forms"
+      "Add-Type -AssemblyName System.Windows.Forms",
+      "function Send-KeysWithDelay($text, $delayMs) {",
+      "  if ([string]::IsNullOrEmpty($text)) { return }",
+      "  $matches = [regex]::Matches($text, '\\{[A-Z0-9 ]+\\}|[\\s\\S]')",
+      "  foreach ($m in $matches) {",
+      "    [System.Windows.Forms.SendKeys]::SendWait($m.Value)",
+      "    if ($delayMs -gt 0) { Start-Sleep -Milliseconds $delayMs }",
+      "  }",
+      "}"
     ];
 
     if (windowTitle && typeof windowTitle === "string" && windowTitle.trim()) {
@@ -1100,20 +1109,20 @@ function registerIpc() {
         "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
         "Start-Sleep -Milliseconds 250"
       );
-      console.log(`[Orbit Type] window="${windowTitle}" len=${text.length} lines=${segments.length} break=${mode}`);
+      console.log(`[Orbit Type] window="${windowTitle}" len=${text.length} lines=${segments.length} break=${mode} charDelay=${charDelay}`);
     } else {
-      console.log(`[Orbit Type] active-window len=${text.length} lines=${segments.length} break=${mode}`);
+      console.log(`[Orbit Type] active-window len=${text.length} lines=${segments.length} break=${mode} charDelay=${charDelay}`);
     }
 
     const advance = mode === "tab" ? "{TAB}" : mode === "enter" ? "{ENTER}" : "";
     segments.forEach((seg, idx) => {
       const escaped = escapeSendKeys(seg);
       if (escaped.length > 0) {
-        lines.push(`[System.Windows.Forms.SendKeys]::SendWait(${psString(escaped)})`);
+        lines.push(`Send-KeysWithDelay -text ${psString(escaped)} -delayMs ${charDelay}`);
       }
       const isLast = idx === segments.length - 1;
       if (!isLast && advance) {
-        lines.push(`[System.Windows.Forms.SendKeys]::SendWait('${advance}')`);
+        lines.push(`Send-KeysWithDelay -text '${advance}' -delayMs ${charDelay}`);
         if (delay > 0) lines.push(`Start-Sleep -Milliseconds ${delay}`);
       }
     });
@@ -1244,7 +1253,12 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("workspace:run-command", async (_event, { workspacePath, command }) => {
+  // Run a workspace command. Defaults to PowerShell 7+ (pwsh) on Windows so
+  // common Unix-y commands the AI emits (`ls`, `cat`, `grep`, pipelines,
+  // `&&` chains) behave sensibly instead of failing under cmd.exe. Accepts
+  // an explicit `shell: "cmd" | "powershell" | "bash"` override if the AI
+  // needs a specific interpreter.
+  ipcMain.handle("workspace:run-command", async (_event, { workspacePath, command, shell }) => {
     const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
     if (!root) {
       return { ok: false, exitCode: 1, stdout: "", stderr: "", error: "No workspace is open." };
@@ -1252,26 +1266,60 @@ function registerIpc() {
     if (typeof command !== "string" || !command.trim()) {
       return { ok: false, exitCode: 1, stdout: "", stderr: "", error: "Missing or invalid command." };
     }
+    const choice = (shell || "powershell").toLowerCase();
+    let argv;
+    if (choice === "cmd") {
+      argv = ["cmd.exe", ["/d", "/s", "/c", command]];
+    } else if (choice === "bash") {
+      argv = ["bash", ["-lc", command]];
+    } else {
+      // PowerShell — prefer pwsh, fall back to Windows PowerShell.
+      const psBin = process.env.ORBIT_PWSH || "powershell.exe";
+      argv = [psBin, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command]];
+    }
     return new Promise((resolve) => {
-      exec(command, { cwd: root, env: { ...process.env, PAGER: "cat" }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
-        resolve({
-          ok: !error,
-          exitCode: error ? error.code : 0,
-          stdout: stdout || "",
-          stderr: stderr || "",
-          error: error ? error.message : null
-        });
+      const child = spawn(argv[0], argv[1], {
+        cwd: root,
+        env: { ...process.env, PAGER: "cat", NO_COLOR: "1" },
+        windowsHide: true
+      });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const MAX_BUF = 4 * 1024 * 1024;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGTERM"); } catch {}
+        setTimeout(() => { try { if (!child.killed) child.kill("SIGKILL"); } catch {} }, 1500);
+      }, 120_000);
+      child.stdout.on("data", (d) => { if (stdout.length < MAX_BUF) stdout += d.toString(); });
+      child.stderr.on("data", (d) => { if (stderr.length < MAX_BUF) stderr += d.toString(); });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        resolve({ ok: false, exitCode: -1, stdout, stderr, error: `Failed to start ${argv[0]}: ${err.message}` });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          resolve({ ok: false, exitCode: 124, stdout, stderr, error: "Command timed out after 120s and was terminated." });
+        } else {
+          resolve({ ok: code === 0, exitCode: code, stdout, stderr, error: code === 0 ? null : `Exit code ${code}` });
+        }
       });
     });
   });
 
-  ipcMain.handle("desktop:click-pixel", async (_event, { x, y }) => {
+  ipcMain.handle("desktop:click-pixel", async (_event, { x, y, button, count }) => {
     if (typeof x !== "number" || typeof y !== "number") {
       return { ok: false, error: "Invalid coordinates" };
     }
     if (x < 0 || y < 0 || x > 30000 || y > 30000) {
       return { ok: false, error: `Coordinates out of range: (${x}, ${y})` };
     }
+    const btn = ({ left: "L", right: "R", middle: "M" })[String(button || "left").toLowerCase()] || "L";
+    const clicks = Math.max(1, Math.min(3, Number.isFinite(count) ? count : 1));
+    const downFlag = btn === "L" ? "0x0002" : btn === "R" ? "0x0008" : "0x0020";
+    const upFlag   = btn === "L" ? "0x0004" : btn === "R" ? "0x0010" : "0x0040";
 
     // user32.dll mouse_event constants:
     //   MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -1299,13 +1347,16 @@ public static extern bool SetCursorPos(int X, int Y);
 [OrbitWin32.OrbitMouse]::SetCursorPos(${x}, ${y}) | Out-Null
 [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y})
 Start-Sleep -Milliseconds 80
-[OrbitWin32.OrbitMouse]::mouse_event(0x0002, 0, 0, 0, 0)
-Start-Sleep -Milliseconds 50
-[OrbitWin32.OrbitMouse]::mouse_event(0x0004, 0, 0, 0, 0)
+for ($i = 0; $i -lt ${clicks}; $i++) {
+  [OrbitWin32.OrbitMouse]::mouse_event(${downFlag}, 0, 0, 0, 0)
+  Start-Sleep -Milliseconds 30
+  [OrbitWin32.OrbitMouse]::mouse_event(${upFlag}, 0, 0, 0, 0)
+  if ($i -lt (${clicks} - 1)) { Start-Sleep -Milliseconds 60 }
+}
 Write-Output 'OK'
 `.trim();
 
-    console.log(`[Orbit Click] at (${x}, ${y})`);
+    console.log(`[Orbit Click] at (${x}, ${y}) button=${btn} clicks=${clicks}`);
 
     // Make the overlay click-through for the duration of the click so the
     // cursor lands on whatever window is underneath instead of Orbit's own
@@ -1337,6 +1388,98 @@ Write-Output 'OK'
     } finally {
       if (restoreOverlay) restoreOverlay();
     }
+  });
+
+  // Scroll the mouse wheel at (x, y). `ticks` is positive = up, negative = down.
+  // 120 is the canonical Windows wheel delta per detent; we multiply.
+  ipcMain.handle("desktop:scroll", async (_event, { x, y, ticks }) => {
+    if (typeof x !== "number" || typeof y !== "number") {
+      return { ok: false, error: "Invalid coordinates" };
+    }
+    const t = Math.max(-30, Math.min(30, Number.isFinite(ticks) ? Math.trunc(ticks) : -3));
+    if (t === 0) return { ok: true };
+    const script = `
+Add-Type -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool SetProcessDPIAware();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool SetCursorPos(int X, int Y);
+"@ -Name "OrbitScroll" -Namespace "OrbitWin32"
+[OrbitWin32.OrbitScroll]::SetProcessDPIAware() | Out-Null
+[OrbitWin32.OrbitScroll]::SetCursorPos(${x}, ${y}) | Out-Null
+Start-Sleep -Milliseconds 50
+[OrbitWin32.OrbitScroll]::mouse_event(0x0800, 0, 0, ${t * 120}, 0)
+Write-Output 'OK'
+`.trim();
+    console.log(`[Orbit Scroll] at (${x}, ${y}) ticks=${t}`);
+    const res = await runPowerShell(script);
+    return res.ok ? { ok: true } : { ok: false, error: (res.stderr || res.error || "scroll failed").trim() };
+  });
+
+  // Send a single SendKeys directive (e.g. "^s", "%{F4}", "{ENTER}") to the
+  // focused or named window without escaping. Distinct from type_text, which
+  // is for typing literal characters. Use this for hotkeys / keyboard combos.
+  ipcMain.handle("desktop:keystroke", async (_event, { windowTitle, keys }) => {
+    if (typeof keys !== "string" || !keys) return { ok: false, error: "Missing keys" };
+    const psString = (s) => `'${s.replace(/'/g, "''")}'`;
+    const lines = ["Add-Type -AssemblyName System.Windows.Forms"];
+    if (windowTitle && typeof windowTitle === "string" && windowTitle.trim()) {
+      lines.push(
+        "$wshell = New-Object -ComObject wscript.shell",
+        `$title = ${psString(windowTitle)}`,
+        "$activated = $wshell.AppActivate($title)",
+        "if (-not $activated) {",
+        "  $proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+        "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
+        "}",
+        "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
+        "Start-Sleep -Milliseconds 200"
+      );
+    }
+    lines.push(`[System.Windows.Forms.SendKeys]::SendWait(${psString(keys)})`, "Write-Output 'OK'");
+    const res = await runPowerShell(lines.join("\n"));
+    if (!res.ok) {
+      const err = (res.stderr || res.error || "").trim();
+      const msg = /window-not-found/.test(err)
+        ? `No window matched "${windowTitle}".`
+        : err || "PowerShell exited non-zero";
+      return { ok: false, error: msg };
+    }
+    return { ok: true };
+  });
+
+  // Bring a named window to the foreground without typing or clicking.
+  ipcMain.handle("desktop:focus-window", async (_event, { windowTitle }) => {
+    if (typeof windowTitle !== "string" || !windowTitle.trim()) {
+      return { ok: false, error: "Missing window title" };
+    }
+    const psString = (s) => `'${s.replace(/'/g, "''")}'`;
+    const script = [
+      "$wshell = New-Object -ComObject wscript.shell",
+      `$title = ${psString(windowTitle)}`,
+      "$activated = $wshell.AppActivate($title)",
+      "if (-not $activated) {",
+      "  $proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+      "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
+      "}",
+      "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
+      "Write-Output 'OK'"
+    ].join("\n");
+    const res = await runPowerShell(script);
+    if (!res.ok) {
+      const err = (res.stderr || res.error || "").trim();
+      return { ok: false, error: /window-not-found/.test(err) ? `No window matched "${windowTitle}".` : (err || "focus failed") };
+    }
+    return { ok: true };
+  });
+
+  // Explicit pause so the AI can let UIs settle between actions.
+  ipcMain.handle("desktop:wait", async (_event, { ms }) => {
+    const wait = Math.max(0, Math.min(10000, Number.isFinite(ms) ? ms : 0));
+    await new Promise((r) => setTimeout(r, wait));
+    return { ok: true, waitedMs: wait };
   });
 
   ipcMain.on("window:drag", (event, { deltaX, deltaY }) => {
