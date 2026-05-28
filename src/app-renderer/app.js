@@ -64,9 +64,9 @@ async function setViewMode(mode) {
   viewMode = "mission-control";
   localStorage.setItem("orbit.viewMode", viewMode);
   document.body.dataset.viewMode = viewMode;
-  viewModeButton.textContent = "Overlay";
-  composerModeButton.textContent = "Overlay";
-  composerModeButton.title = "Switch to floating overlay";
+  viewModeButton.textContent = "Open Overlay";
+  composerModeButton.textContent = "Open Overlay";
+  composerModeButton.title = "Switch to the floating overlay";
   viewModeButton.title = composerModeButton.title;
   await window.orbit?.setOverlayState?.("mission-control");
   setTimeout(() => {

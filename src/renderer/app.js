@@ -82,16 +82,7 @@ const usageMeterEl = document.querySelector("#usageMeter");
 
 function updateUsageMeter() {
   if (!usageMeterEl) return;
-  if (sessionInputTokens === 0 && sessionOutputTokens === 0) {
-    usageMeterEl.style.display = "none";
-    return;
-  }
-  const total = sessionInputTokens + sessionOutputTokens;
-  const compact = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
-  const cost = sessionCostUsd >= 0.01 ? `$${sessionCostUsd.toFixed(2)}` : `${(sessionCostUsd * 100).toFixed(2)}¢`;
-  usageMeterEl.textContent = `${compact} · ${cost}`;
-  usageMeterEl.title = `Session usage: ${sessionInputTokens} in + ${sessionOutputTokens} out tokens · estimated ${cost}`;
-  usageMeterEl.style.display = "inline-block";
+  usageMeterEl.style.display = "none";
 }
 
 function recordUsage(payload) {
@@ -583,6 +574,7 @@ async function startRecording() {
         const bufferLength = analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
 
+        let lastVolume = 0.08;
         function drawVisuals() {
           if (!isListening) return;
           visualizerRaf = requestAnimationFrame(drawVisuals);
@@ -608,8 +600,17 @@ async function startRecording() {
             sum += dataArray[i];
           }
           const average = sum / Math.max(1, activeBins);
-          // Scale dynamically: silent baseline at 0.08, speech spikes up to 2.5+ for vibrant ripples
-          const volume = Math.max(0.08, average / 25.0); 
+
+          // Noise gate: ignore quiet background hums (average < 10)
+          const noiseGate = 10.0;
+          const activeSignal = Math.max(0, average - noiseGate);
+
+          // Compress dynamic range using Square Root scaling (prevents frantic visual clipping)
+          const targetVolume = 0.08 + Math.sqrt(activeSignal) * 0.16;
+
+          // Linear interpolation (smoothing filter) for liquid, premium transitions
+          lastVolume += (targetVolume - lastVolume) * 0.14; // 14% speed for buttery-smooth transitions
+          const volume = lastVolume;
 
           const time = Date.now() * 0.0035;
 
@@ -1576,46 +1577,54 @@ function renderActionCard(part, messageId, partIndex) {
         infoBox.append(note);
         body.append(infoBox);
 
-        const deployMoreContainer = document.createElement("div");
-        deployMoreContainer.style.margin = "10px 14px";
-        deployMoreContainer.style.textAlign = "right";
+        if (isSummonAgentsAuthorized()) {
+          const deployMoreContainer = document.createElement("div");
+          deployMoreContainer.style.margin = "10px 14px";
+          deployMoreContainer.style.textAlign = "right";
 
-        const deployMoreBtn = document.createElement("button");
-        deployMoreBtn.className = "action-btn primary";
-        deployMoreBtn.style.padding = "4px 10px";
-        deployMoreBtn.style.fontSize = "11px";
-        deployMoreBtn.textContent = "+ Deploy Another Agent";
-        if (!isSummonAgentsAuthorized()) {
-          deployMoreBtn.disabled = true;
-          deployMoreBtn.title = "Requires /summon-agents in your message.";
-          deployMoreBtn.style.opacity = "0.5";
-          deployMoreBtn.style.cursor = "not-allowed";
-        }
-        
-        deployMoreBtn.addEventListener("click", async () => {
-          deployMoreBtn.disabled = true;
-          deployMoreBtn.textContent = "Deploying...";
-          
-          const res = await window.orbit.deployAgent({
-            workspacePath,
-            task: part.task
+          const deployMoreBtn = document.createElement("button");
+          deployMoreBtn.className = "action-btn primary";
+          deployMoreBtn.style.padding = "4px 10px";
+          deployMoreBtn.style.fontSize = "11px";
+          deployMoreBtn.textContent = "+ Deploy Another Agent";
+
+          deployMoreBtn.addEventListener("click", async () => {
+            try {
+              const count = await window.orbit.getActiveAgentsCount();
+              if (count >= 5) {
+                toast("Active concurrent background agents limit reached (max 5)", { variant: "error" });
+                deployMoreBtn.remove();
+                return;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+
+            deployMoreBtn.disabled = true;
+            deployMoreBtn.textContent = "Deploying...";
+            
+            const res = await window.orbit.deployAgent({
+              workspacePath,
+              task: part.task,
+              model: selectedModel
+            });
+
+            if (res && res.ok) {
+              cardState.agents.push({
+                agentId: res.agentId,
+                logPath: res.logPath
+              });
+              renderMessages();
+            } else {
+              alert(`Failed to deploy additional agent: ${res?.error || "Unknown error"}`);
+              deployMoreBtn.disabled = false;
+              deployMoreBtn.textContent = "+ Deploy Another Agent";
+            }
           });
 
-          if (res && res.ok) {
-            cardState.agents.push({
-              agentId: res.agentId,
-              logPath: res.logPath
-            });
-            renderMessages();
-          } else {
-            alert(`Failed to deploy additional agent: ${res?.error || "Unknown error"}`);
-            deployMoreBtn.disabled = false;
-            deployMoreBtn.textContent = "+ Deploy Another Agent";
-          }
-        });
-
-        deployMoreContainer.append(deployMoreBtn);
-        body.append(deployMoreContainer);
+          deployMoreContainer.append(deployMoreBtn);
+          body.append(deployMoreContainer);
+        }
       }
     }
   } else if (part.type === "open_browser") {
@@ -1644,30 +1653,43 @@ function renderActionCard(part, messageId, partIndex) {
   if (cardState.status === "pending") {
     statusSpan.textContent = "Requires approval";
 
-    const approveBtn = document.createElement("button");
-    approveBtn.className = "action-btn primary";
-    approveBtn.textContent =
-      part.type === "execute_command" ? "Execute" :
-      part.type === "write_file" ? "Apply" :
-      part.type === "type_text" ? "Type" :
-      part.type === "list_workspace" ? "Scan" :
-      part.type === "click_pixel" ? "Click" :
-      part.type === "open_browser" ? "Open" :
-      part.type === "deploy_agent" ? "Deploy" : "Load";
-
     if (part.type === "deploy_agent" && !isSummonAgentsAuthorized()) {
-      statusSpan.textContent = "Requires /summon-agents";
-      approveBtn.disabled = true;
-      approveBtn.title = "To deploy background agents, you must include '/summon-agents' in your message.";
-      approveBtn.style.opacity = "0.5";
-      approveBtn.style.cursor = "not-allowed";
+      statusSpan.textContent = "🔒 Requires /summon-agents to deploy";
     } else {
-      approveBtn.addEventListener("click", async () => {
-        await runActionCard(part, cardKey, statusSpan, approveBtn, messageId);
-      });
-    }
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "action-btn primary";
+      approveBtn.textContent =
+        part.type === "execute_command" ? "Execute" :
+        part.type === "write_file" ? "Apply" :
+        part.type === "type_text" ? "Type" :
+        part.type === "list_workspace" ? "Scan" :
+        part.type === "click_pixel" ? "Click" :
+        part.type === "open_browser" ? "Open" :
+        part.type === "deploy_agent" ? "Deploy" : "Load";
 
-    actions.append(statusSpan, approveBtn);
+      if (part.type === "deploy_agent") {
+        approveBtn.addEventListener("click", async () => {
+          try {
+            const count = await window.orbit.getActiveAgentsCount();
+            if (count >= 5) {
+              statusSpan.textContent = "Deploy limit reached (max 5 active)";
+              approveBtn.remove();
+              toast("Active concurrent background agents limit reached (max 5)", { variant: "error" });
+              return;
+            }
+          } catch (e) {
+            console.error(e);
+          }
+          await runActionCard(part, cardKey, statusSpan, approveBtn, messageId);
+        });
+      } else {
+        approveBtn.addEventListener("click", async () => {
+          await runActionCard(part, cardKey, statusSpan, approveBtn, messageId);
+        });
+      }
+
+      actions.append(statusSpan, approveBtn);
+    }
   } else if (cardState.status === "working") {
     statusSpan.className = "action-card-status working";
     statusSpan.textContent =
@@ -1984,7 +2006,8 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
     for (let i = 0; i < count; i++) {
       const res = await window.orbit.deployAgent({
         workspacePath,
-        task: part.task
+        task: part.task,
+        model: selectedModel
       });
 
       if (res && res.ok) {

@@ -93,13 +93,16 @@ select {
 
 .view-mode-button {
   margin-left: 5px;
-  padding: 0 10px !important;
+  height: 23px !important;
+  padding: 0 11px !important;
   border-radius: 6px;
-  color: #cfdfea !important;
+  background: rgba(128, 199, 255, 0.12) !important;
+  color: #d9efff !important;
+  cursor: pointer !important;
 }
 
 .view-mode-button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(128, 199, 255, 0.2) !important;
 }
 
 .window-controls {
@@ -606,14 +609,6 @@ select {
   position: relative;
 }
 
-.view-switch-pill {
-  color: #d9eafa;
-}
-
-.view-switch-pill::before {
-  border-color: #80c7ff;
-}
-
 .mode-pill::before {
   content: "";
   position: absolute;
@@ -622,6 +617,24 @@ select {
   height: 7px;
   border: 1px solid #8b8b91;
   border-radius: 1px;
+}
+
+.overlay-command-button {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 199, 255, 0.25);
+  background: rgba(128, 199, 255, 0.1);
+  color: #d9efff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.overlay-command-button:hover {
+  background: rgba(128, 199, 255, 0.18);
+  border-color: rgba(128, 199, 255, 0.4);
 }
 
 .mode-pill:hover {

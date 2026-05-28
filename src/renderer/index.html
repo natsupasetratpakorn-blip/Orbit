@@ -31,12 +31,37 @@
             <span>Voyager 1 Flash</span> ▾
           </button>
           <div class="custom-select-options" id="overlayModelOptions">
-            <div class="custom-select-option" data-value="Auto">⚡ Auto</div>
-            <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
-            <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
-            <div class="custom-select-option" data-value="Voyager 2 Preview">✦ Voyager 2 Preview</div>
-            <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
-            <div class="custom-select-option" data-value="Orchestra 1.1">🎻 Orchestra 1.1</div>
+            <div class="custom-select-option" data-value="Auto">⊛ Auto</div>
+            <div class="custom-select-category" data-category="voyager-1">
+              <div class="custom-select-category-header">
+                <span>✧ Voyager 1</span>
+                <span class="cat-arrow">›</span>
+              </div>
+              <div class="custom-select-submenu">
+                <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
+                <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
+              </div>
+            </div>
+            <div class="custom-select-category" data-category="voyager-2">
+              <div class="custom-select-category-header">
+                <span>◈ Voyager 2</span>
+                <span class="cat-arrow">›</span>
+              </div>
+              <div class="custom-select-submenu">
+                <div class="custom-select-option" data-value="Voyager 2 Preview">✦ Voyager 2 Preview</div>
+                <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
+                <div class="custom-select-option" data-value="Voyager 2.1">◈ Voyager 2.1</div>
+              </div>
+            </div>
+            <div class="custom-select-category" data-category="orchestra">
+              <div class="custom-select-category-header">
+                <span>❖ Orchestra</span>
+                <span class="cat-arrow">›</span>
+              </div>
+              <div class="custom-select-submenu">
+                <div class="custom-select-option" data-value="Orchestra 1.1">❖ Orchestra 1.1</div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="custom-select-container" id="overlayModeSelectContainer">
@@ -44,9 +69,9 @@
             <span>Ask</span> ▾
           </button>
           <div class="custom-select-options" id="overlayModeOptions">
-            <div class="custom-select-option selected" data-value="ask">💬 Ask</div>
-            <div class="custom-select-option" data-value="agents">🤖 Agents</div>
-            <div class="custom-select-option" data-value="planning">📋 Planning</div>
+            <div class="custom-select-option selected" data-value="ask">❯ Ask</div>
+            <div class="custom-select-option" data-value="agents">▣ Agents</div>
+            <div class="custom-select-option" data-value="planning">☰ Planning</div>
           </div>
         </div>
         <input id="promptInput" class="prompt-input" type="text" placeholder="Ask with screen context..." aria-label="Message" />
@@ -80,11 +105,12 @@
             <p id="panelSubtitle" class="panel-subtitle">Local shell mode</p>
           </div>
           <div class="panel-header-actions">
-            <button id="fullAppButton" class="icon-button mini-button full-app-button" type="button" aria-label="Open full app" title="Open full app">
+            <button id="fullAppButton" class="full-app-button" type="button" aria-label="Open full app" title="Open full app">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <path d="M8 9h8M8 13h5" />
               </svg>
+              <span>Full App</span>
             </button>
             <button id="autoModeButton" class="icon-button mini-button auto-button" type="button" aria-label="Toggle Auto Mode" title="Toggle Auto Mode (run actions without asking)">
               <svg viewBox="0 0 24 24" aria-hidden="true">
