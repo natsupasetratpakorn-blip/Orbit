@@ -23,6 +23,7 @@
           <button type="button" class="menu-item" data-menu="file">File</button>
           <button type="button" class="menu-item" data-menu="view">View</button>
           <button type="button" class="menu-item" data-menu="window">Window</button>
+          <div id="menuDropdown" class="menu-dropdown" hidden></div>
           <button id="viewModeButton" class="view-mode-button" type="button" title="Switch to floating overlay">↗ Overlay</button>
         </nav>
         <div class="window-controls" aria-label="Window controls">
@@ -44,7 +45,7 @@
           </button>
           <button id="tasksButton" class="nav-button" type="button">
             <span class="nav-icon">◧</span>
-            <span>Scheduled Tasks</span>
+            <span>Background Agents</span>
           </button>
         </div>
 
@@ -130,8 +131,10 @@
                         <span class="cat-arrow">›</span>
                       </div>
                       <div class="custom-select-submenu">
-                        <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
-                        <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
+                        <div class="submenu-inner">
+                          <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
+                          <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
+                        </div>
                       </div>
                     </div>
                     <div class="custom-select-category" data-category="voyager-2">
@@ -140,9 +143,11 @@
                         <span class="cat-arrow">›</span>
                       </div>
                       <div class="custom-select-submenu">
-                        <div class="custom-select-option" data-value="Voyager 2 Preview">✦ Voyager 2 Preview</div>
-                        <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
-                        <div class="custom-select-option" data-value="Voyager 2.1">◈ Voyager 2.1</div>
+                        <div class="submenu-inner">
+                          <div class="custom-select-option" data-value="Voyager 2">✦ Voyager 2</div>
+                          <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
+                          <div class="custom-select-option" data-value="Voyager 2.1 Preview">◈ Voyager 2.1 Preview</div>
+                        </div>
                       </div>
                     </div>
                     <div class="custom-select-category" data-category="orchestra">
@@ -151,7 +156,9 @@
                         <span class="cat-arrow">›</span>
                       </div>
                       <div class="custom-select-submenu">
-                        <div class="custom-select-option" data-value="Orchestra 1.1">❖ Orchestra 1.1</div>
+                        <div class="submenu-inner">
+                          <div class="custom-select-option" data-value="Orchestra 1.1">❖ Orchestra 1.1</div>
+                        </div>
                       </div>
                     </div>
                   </div>

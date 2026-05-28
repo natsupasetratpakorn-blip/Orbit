@@ -5,9 +5,9 @@ const MODELS = [
   "Auto",
   "Voyager 1",
   "Voyager 1 Flash",
-  "Voyager 2 Preview",
+  "Voyager 2",
   "Voyager 2 Pro",
-  "Voyager 2.1",
+  "Voyager 2.1 Preview",
   "Orchestra 1.1"
 ];
 const DEFAULT_MODEL = "Voyager 1 Flash";
@@ -72,9 +72,9 @@ const MODEL_PRICING = {
 const MODEL_TO_VERTEX_ID = {
   "Voyager 1": "gemini-2.5-flash",
   "Voyager 1 Flash": "gemini-2.5-flash-lite",
-  "Voyager 2 Preview": "gemini-3.1-flash-lite",
+  "Voyager 2": "gemini-3.1-flash-lite",
   "Voyager 2 Pro": "gemini-3.5-flash",
-  "Voyager 2.1": "gemini-2.5-flash",
+  "Voyager 2.1 Preview": "gemini-2.5-flash",
   "Orchestra 1.1": "gemini-2.5-flash-lite"
 };
 let sessionInputTokens = 0;

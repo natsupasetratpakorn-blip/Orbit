@@ -36,6 +36,10 @@ const projectsList = $("#projectsList");
 const conversationsList = $("#conversationsList");
 const filesList = $("#filesList");
 const newChatButton = $("#newChatButton");
+const historyButton = $("#historyButton");
+const tasksButton = $("#tasksButton");
+const settingsButton = $("#settingsButton");
+const menuDropdown = $("#menuDropdown");
 const addProjectButton = $("#addProjectButton");
 const addFileButton = $("#addFileButton");
 const activeProjectName = $("#activeProjectName");
@@ -60,7 +64,6 @@ const cursorGlow = $("#cursorGlow");
 const viewModeButton = $("#viewModeButton");
 const chatStatTokens = $("#chatStatTokens");
 const chatStatMessages = $("#chatStatMessages");
-const settingsButton = $("#settingsButton");
 
 // ─── State ───────────────────────────────────────────────────────────────
 let state = loadState();
@@ -147,8 +150,9 @@ function renderProjects() {
   projectsList.innerHTML = "";
 
   state.projects.forEach((project) => {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
+    item.setAttribute("role", "button");
+    item.tabIndex = 0;
     item.className = `project-row${project.id === state.activeProjectId ? " is-active" : ""}`;
     const dotColor = colorForId(project.id);
     item.innerHTML = `
@@ -157,7 +161,7 @@ function renderProjects() {
         <span class="project-name"></span>
         <span class="project-subline"></span>
       </span>
-      <span class="activity-dot"></span>
+      <button type="button" class="row-delete" aria-label="Delete project" title="Delete project">×</button>
     `;
     item.querySelector(".project-name").textContent = project.name;
     const subline = project.workspacePath
@@ -172,6 +176,10 @@ function renderProjects() {
       persistState();
     });
     item.addEventListener("dblclick", () => renameProject(project.id));
+    item.querySelector(".row-delete").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteProject(project.id);
+    });
     projectsList.append(item);
   });
 }
@@ -184,12 +192,14 @@ function renderConversations() {
     return;
   }
   [...project.chats].reverse().forEach((chat) => {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
+    item.setAttribute("role", "button");
+    item.tabIndex = 0;
     item.className = `conversation-row${chat.id === state.activeChatId ? " is-active" : ""}`;
     item.innerHTML = `
       <span class="conversation-title"></span>
       <span class="conversation-age"></span>
+      <button type="button" class="row-delete" aria-label="Delete conversation" title="Delete conversation">×</button>
     `;
     item.querySelector(".conversation-title").textContent = chat.title;
     item.querySelector(".conversation-age").textContent = formatAge(chat.createdAt);
@@ -199,6 +209,10 @@ function renderConversations() {
       persistState();
     });
     item.addEventListener("dblclick", () => renameChat(chat.id));
+    item.querySelector(".row-delete").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteChat(chat.id);
+    });
     conversationsList.append(item);
   });
 }
@@ -289,6 +303,16 @@ function renderUserBody(message, container) {
   }
 }
 
+// Per-(message, partIndex) execution state for action cards. Survives
+// re-renders so a card doesn't re-run every time the list refreshes.
+const cardExecutionStates = {};
+const READ_ONLY_TOOL_TYPES = new Set(["read_file", "list_workspace", "list_windows", "search_workspace"]);
+const AUTO_RUN_IN_AGENT_MODE = new Set([
+  "execute_command", "write_file", "patch_file",
+  "type_text", "click_pixel", "scroll", "keystroke", "focus_window", "wait_ms",
+  "open_browser", "deploy_agent"
+]);
+
 function renderAssistantBody(message, container) {
   const parts = parseAIResponse(message.content || "");
   if (!parts.length) {
@@ -298,6 +322,7 @@ function renderAssistantBody(message, container) {
     container.append(p);
     return;
   }
+  let partIdx = 0;
   for (const part of parts) {
     if (part.type === "text") {
       const p = document.createElement("div");
@@ -305,41 +330,304 @@ function renderAssistantBody(message, container) {
       p.innerHTML = renderMarkdown(part.content);
       container.append(p);
     } else {
-      container.append(renderActionCardReadonly(part));
+      const cardKey = `${message.id}-${part.type}-${partIdx}`;
+      container.append(renderActionCard(part, cardKey));
+      partIdx++;
     }
   }
 }
 
-function renderActionCardReadonly(part) {
+// After the message list re-renders, auto-fire any tool cards that haven't
+// been started yet. Read-only tools always auto-fire. Other tools only
+// auto-fire when the active mode is "agents". One per render to avoid
+// hammering — the next card fires after its TOOL_RESULT comes back and
+// triggers another AI turn → re-render → auto-fire loop.
+function maybeAutoFireTools() {
+  if (streaming) return;
+  const chat = getActiveChat(state);
+  if (!chat) return;
+  for (let mi = chat.messages.length - 1; mi >= 0; mi--) {
+    const msg = chat.messages[mi];
+    if (msg.role !== "assistant" || msg.streaming || msg.isToolResult) continue;
+    const parts = parseAIResponse(msg.content || "");
+    let partIdx = 0;
+    for (const part of parts) {
+      if (part.type === "text") continue;
+      const cardKey = `${msg.id}-${part.type}-${partIdx}`;
+      const cardState = cardExecutionStates[cardKey];
+      const canAuto = READ_ONLY_TOOL_TYPES.has(part.type)
+        || (currentMode === "agents" && AUTO_RUN_IN_AGENT_MODE.has(part.type));
+      if (!cardState && canAuto) {
+        cardExecutionStates[cardKey] = { status: "running" };
+        executeToolPart(part, cardKey, msg.id).catch(() => {});
+        return; // one at a time
+      }
+    }
+    break; // only consider the most recent assistant message
+  }
+}
+
+const TOOL_LABEL = {
+  execute_command: "Run command",
+  write_file: "Write file",
+  patch_file: "Patch file",
+  read_file: "Read file",
+  list_workspace: "List workspace",
+  list_windows: "List windows",
+  search_workspace: "Search workspace",
+  type_text: "Type text",
+  click_pixel: "Click pixel",
+  scroll: "Scroll",
+  keystroke: "Keystroke",
+  focus_window: "Focus window",
+  wait_ms: "Wait",
+  open_browser: "Open browser",
+  deploy_agent: "Deploy agent"
+};
+
+function renderActionCard(part, cardKey) {
   const card = document.createElement("div");
   card.className = `action-card action-${part.type}`;
+  card.dataset.cardKey = cardKey;
+  const cardState = cardExecutionStates[cardKey] || { status: "idle" };
+
   const head = document.createElement("div");
   head.className = "action-card-head";
-  const label = {
-    execute_command: "Run command",
-    write_file: "Write file",
-    patch_file: "Patch file",
-    read_file: "Read file",
-    list_workspace: "List workspace",
-    list_windows: "List windows",
-    search_workspace: "Search workspace",
-    type_text: "Type text",
-    click_pixel: "Click pixel",
-    open_browser: "Open browser",
-    deploy_agent: "Deploy agent"
-  }[part.type] || part.type;
-  head.innerHTML = `<span class="action-icon"></span><span class="action-label">${label}</span>`;
-  if (part.path) head.innerHTML += `<span class="action-path">${escapeHtml(part.path)}</span>`;
-  if (part.window) head.innerHTML += `<span class="action-path">→ ${escapeHtml(part.window)}</span>`;
-  if (part.url) head.innerHTML += `<span class="action-path">${escapeHtml(part.url)}</span>`;
+  const label = TOOL_LABEL[part.type] || part.type;
+  const subtitle = part.path ? part.path
+    : part.window ? `→ ${part.window}`
+    : part.url ? part.url
+    : part.type === "click_pixel" || part.type === "scroll" ? `x=${part.x}, y=${part.y}${part.ticks != null ? `, ticks=${part.ticks}` : ""}`
+    : part.type === "wait_ms" ? `${part.ms}ms`
+    : part.query ? `"${part.query}"`
+    : "";
+  head.innerHTML = `
+    <span class="action-icon"></span>
+    <span class="action-label">${escapeHtml(label)}</span>
+    ${subtitle ? `<span class="action-path">${escapeHtml(subtitle)}</span>` : ""}
+    <span class="action-status status-${cardState.status}"></span>
+  `;
   card.append(head);
+
   if (part.content) {
     const body = document.createElement("pre");
     body.className = "action-body";
     body.textContent = part.content.length > 1000 ? part.content.slice(0, 1000) + "\n…" : part.content;
     card.append(body);
   }
+
+  // Result panel (output / error)
+  if (cardState.output || cardState.error) {
+    const out = document.createElement("pre");
+    out.className = `action-result ${cardState.error ? "is-error" : "is-success"}`;
+    out.textContent = cardState.error || (cardState.output.length > 1500 ? cardState.output.slice(0, 1500) + "\n…(truncated)" : cardState.output);
+    card.append(out);
+  }
+
+  // Footer: Run button + status
+  const footer = document.createElement("div");
+  footer.className = "action-card-footer";
+  const statusText = ({
+    idle: "Idle",
+    running: "Running…",
+    success: "✓ Done",
+    error: "× Failed"
+  })[cardState.status] || cardState.status;
+  footer.innerHTML = `<span class="action-status-text">${statusText}</span>`;
+  if (cardState.status === "idle" || cardState.status === "error") {
+    const runBtn = document.createElement("button");
+    runBtn.type = "button";
+    runBtn.className = "action-run-btn";
+    runBtn.textContent = cardState.status === "error" ? "Retry" : "Run";
+    runBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cardExecutionStates[cardKey] = { status: "running" };
+      const msgId = card.closest("[data-msg-id]")?.dataset.msgId;
+      executeToolPart(part, cardKey, msgId).catch(() => {});
+      render();
+    });
+    footer.append(runBtn);
+  }
+  card.append(footer);
+
   return card;
+}
+
+// Dispatch one tool to the right preload API, persist the result on the
+// card, append a [TOOL_RESULT] user message so the AI sees it next turn,
+// then re-render and trigger a follow-up AI turn.
+async function executeToolPart(part, cardKey, messageId) {
+  const activeProject = getActiveProject(state);
+  const workspacePath = activeProject?.workspacePath || "";
+  let toolResult = "";
+  let ok = true;
+  let output = "";
+
+  try {
+    switch (part.type) {
+      case "execute_command": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.runWorkspaceCommand({ workspacePath, command: (part.content || "").trim(), shell: part.shell || undefined });
+        ok = !!res?.ok;
+        output = `exit code: ${res?.exitCode}\n${(res?.stdout || "").trim()}${res?.stderr ? "\n--- stderr ---\n" + res.stderr.trim() : ""}`.trim() || "(no output)";
+        toolResult = `[TOOL_RESULT: execute_command]\n${output}`;
+        break;
+      }
+      case "write_file": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.writeWorkspaceFile({ workspacePath, path: part.path, content: part.content || "" });
+        ok = !!res?.ok;
+        output = ok ? `Wrote ${part.path}` : (res?.error || "Write failed");
+        toolResult = `[TOOL_RESULT: write_file path="${part.path}"]\n${output}`;
+        break;
+      }
+      case "patch_file": {
+        // No dedicated patch IPC in this app yet — fall back to read+apply+write.
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const read = await window.orbit.readWorkspaceFile({ workspacePath, path: part.path });
+        if (!read?.ok) { ok = false; output = `Read failed: ${read?.error || "unknown"}`; toolResult = `[TOOL_RESULT: patch_file path="${part.path}" FAILED] ${output}`; break; }
+        const { applySearchReplacePatches } = await import("../shared/parser.js");
+        let next;
+        try { next = applySearchReplacePatches(read.content, part.content || ""); }
+        catch (e) { ok = false; output = `Patch failed: ${e.message}`; toolResult = `[TOOL_RESULT: patch_file path="${part.path}" FAILED] ${output}`; break; }
+        const write = await window.orbit.writeWorkspaceFile({ workspacePath, path: part.path, content: next });
+        ok = !!write?.ok;
+        output = ok ? `Patched ${part.path}` : (write?.error || "Write failed");
+        toolResult = `[TOOL_RESULT: patch_file path="${part.path}"]\n${output}`;
+        break;
+      }
+      case "read_file": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.readWorkspaceFile({ workspacePath, path: part.path });
+        ok = !!res?.ok;
+        output = ok ? res.content : (res?.error || "Read failed");
+        toolResult = `[TOOL_RESULT: read_file path="${part.path}"]\n${truncateForAI(output)}`;
+        break;
+      }
+      case "list_workspace": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.getWorkspaceInfo(workspacePath);
+        if (res && res.ok !== false) {
+          const files = res.files || [];
+          ok = true;
+          output = files.slice(0, 250).map((f) => `- ${f}`).join("\n") + (files.length > 250 ? `\n…and ${files.length - 250} more` : "");
+        } else {
+          ok = false; output = res?.error || "list_workspace failed";
+        }
+        toolResult = `[TOOL_RESULT: list_workspace]\n${output}`;
+        break;
+      }
+      case "search_workspace": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.searchWorkspace({ workspacePath, query: part.query, mode: part.mode || "literal" });
+        ok = !!res?.ok;
+        output = ok
+          ? (res.matches || []).map((m) => `${m.path}:${m.line}: ${m.text}`).join("\n") || "(no matches)"
+          : (res?.error || "search failed");
+        toolResult = `[TOOL_RESULT: search_workspace]\n${truncateForAI(output)}`;
+        break;
+      }
+      case "list_windows": {
+        const res = await window.orbit.listWindows();
+        ok = !!res?.ok;
+        output = ok
+          ? (res.windows || []).map((w) => `[${w.pid}] ${w.processName} — "${w.title}"`).join("\n")
+          : (res?.error || "list_windows failed");
+        toolResult = `[TOOL_RESULT: list_windows]\n${output}`;
+        break;
+      }
+      case "type_text": {
+        const res = await window.orbit.typeIntoWindow({ windowTitle: part.window || null, text: part.content || "" });
+        ok = !!res?.ok;
+        output = ok ? `Typed ${(part.content || "").length} chars` : (res?.error || "type failed");
+        toolResult = `[TOOL_RESULT: type_text${part.window ? ` window="${part.window}"` : ""}]\n${output}`;
+        break;
+      }
+      case "click_pixel": {
+        const res = await window.orbit.clickPixel({ x: part.x, y: part.y, button: part.button || "left", count: part.count || 1 });
+        ok = !!res?.ok;
+        output = ok ? `Clicked (${part.x}, ${part.y})` : (res?.error || "click failed");
+        toolResult = `[TOOL_RESULT: click_pixel x=${part.x} y=${part.y}]\n${output}`;
+        break;
+      }
+      case "scroll": {
+        const res = await window.orbit.scrollAt({ x: part.x, y: part.y, ticks: part.ticks });
+        ok = !!res?.ok;
+        output = ok ? `Scrolled ${part.ticks} ticks at (${part.x}, ${part.y})` : (res?.error || "scroll failed");
+        toolResult = `[TOOL_RESULT: scroll]\n${output}`;
+        break;
+      }
+      case "keystroke": {
+        const res = await window.orbit.keystroke({ windowTitle: part.window || null, keys: part.content || "" });
+        ok = !!res?.ok;
+        output = ok ? `Sent "${part.content}"` : (res?.error || "keystroke failed");
+        toolResult = `[TOOL_RESULT: keystroke]\n${output}`;
+        break;
+      }
+      case "focus_window": {
+        const res = await window.orbit.focusWindow({ windowTitle: part.window });
+        ok = !!res?.ok;
+        output = ok ? `Focused "${part.window}"` : (res?.error || "focus failed");
+        toolResult = `[TOOL_RESULT: focus_window]\n${output}`;
+        break;
+      }
+      case "wait_ms": {
+        const res = await window.orbit.waitMs({ ms: part.ms });
+        ok = true;
+        output = `Waited ${res?.waitedMs ?? part.ms}ms`;
+        toolResult = `[TOOL_RESULT: wait_ms]\n${output}`;
+        break;
+      }
+      case "open_browser": {
+        const res = await window.orbit.openBrowser({ url: part.url });
+        ok = !!res?.ok;
+        output = ok ? `Opened ${part.url}` : (res?.error || "open_browser failed");
+        toolResult = `[TOOL_RESULT: open_browser]\n${output}`;
+        break;
+      }
+      case "deploy_agent": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.deployAgent({ workspacePath, task: part.task, model: selectedModel });
+        ok = !!res?.ok;
+        output = ok ? `Deployed agent ${res.agentId}` : (res?.error || "deploy failed");
+        toolResult = `[TOOL_RESULT: deploy_agent]\n${output}`;
+        break;
+      }
+      default:
+        ok = false;
+        output = `Unknown tool: ${part.type}`;
+        toolResult = `[TOOL_RESULT: ${part.type} FAILED]\n${output}`;
+    }
+  } catch (err) {
+    ok = false;
+    output = err?.message || String(err);
+    toolResult = `[TOOL_RESULT: ${part.type} FAILED]\n${output}`;
+  }
+
+  cardExecutionStates[cardKey] = { status: ok ? "success" : "error", output, error: ok ? null : output };
+
+  // Append a synthetic user message carrying the tool result so the AI can
+  // act on it next turn. Marked isToolResult so it doesn't render in the UI.
+  state = addMessageToActiveChat(state, {
+    id: crypto.randomUUID(),
+    role: "user",
+    content: toolResult,
+    timestamp: new Date().toISOString(),
+    isToolResult: true
+  });
+  render();
+  persistState();
+
+  // Continue the conversation so the AI can react. Skip if currently streaming
+  // (something else is in flight) — the auto-fire loop will pick up the next
+  // pending card after the current turn settles.
+  if (!streaming) await triggerAITurn({ attachmentsForThisTurn: [] });
+}
+
+function truncateForAI(s) {
+  const v = String(s || "");
+  if (v.length <= 12000) return v;
+  return v.slice(0, 12000) + `\n\n[…truncated ${v.length - 12000} chars…]`;
 }
 
 function escapeHtml(s) {
@@ -383,7 +671,6 @@ async function sendMessage(rawText) {
   if (!text) return;
   if (streaming) return; // already in flight
 
-  // Slash-command intercept (skip AI roundtrip when we handle it locally)
   if (text.startsWith("/")) {
     const handled = await tryRunSlashCommand(text);
     if (handled) {
@@ -411,33 +698,36 @@ async function sendMessage(rawText) {
   render();
   persistState();
 
+  await triggerAITurn({ attachmentsForThisTurn: attachmentsSnapshot });
+}
+
+// One round-trip with the AI: capture screenshot if needed, append a
+// streaming assistant placeholder, stream chunks in, and finalize. Used
+// both by sendMessage and by tool-result follow-ups (which pass `null`
+// attachments).
+async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
+  if (streaming) return;
   streaming = true;
   sendButton.disabled = true;
   sendButton.classList.add("is-streaming");
 
-  // Build a streaming assistant placeholder so the chunk handler can append.
   const streamId = crypto.randomUUID();
   streamingMessageId = crypto.randomUUID();
-  const assistantPlaceholder = {
+  state = addMessageToActiveChat(state, {
     id: streamingMessageId,
     role: "assistant",
     content: "",
     timestamp: new Date().toISOString(),
     streaming: true
-  };
-  state = addMessageToActiveChat(state, assistantPlaceholder);
+  });
   render();
-  // Mark the just-appended assistant card as streaming
   decorateStreamingMessage();
 
-  // Wire up chunk listener (cleanup after end).
   let chunkOff = null;
   if (window.orbit?.onAIChunk) {
     chunkOff = window.orbit.onAIChunk((data) => {
       if (!data || data.streamId !== streamId) return;
-      if (typeof data.delta === "string" && data.delta) {
-        appendStreamingDelta(data.delta);
-      }
+      if (typeof data.delta === "string" && data.delta) appendStreamingDelta(data.delta);
     });
   }
 
@@ -446,14 +736,10 @@ async function sendMessage(rawText) {
     screenshotPath = pendingRegionShot;
     pendingRegionShot = null;
   } else if (attachScreenshot) {
-    try {
-      screenshotPath = await window.orbit?.captureScreen?.();
-    } catch { /* ignore */ }
+    try { screenshotPath = await window.orbit?.captureScreen?.(); } catch { /* ignore */ }
   }
 
   const activeChat = getActiveChat(state);
-  // Send the messages excluding the streaming placeholder so the model gets
-  // a clean turn list ending in user.
   const cleanMessages = activeChat.messages.filter((m) => !m.streaming);
 
   let finalText = "";
@@ -464,7 +750,7 @@ async function sendMessage(rawText) {
       model: selectedModel,
       messages: cleanMessages,
       screenshotPath,
-      attachments: attachmentsSnapshot.map((a) => a.path),
+      attachments: attachmentsForThisTurn.map((a) => a.path),
       workspacePath: activeProject?.workspacePath || "",
       agentMode: currentMode === "agents",
       mode: currentMode
@@ -476,9 +762,7 @@ async function sendMessage(rawText) {
     if (chunkOff) try { chunkOff(); } catch { /* ignore */ }
   }
 
-  // Replace the streaming placeholder with the final content. If streaming
-  // had been delivering deltas, prefer the final text from the response since
-  // it reflects the final, normalized content.
+  const finalizedId = streamingMessageId;
   state = {
     ...state,
     projects: state.projects.map((p) => {
@@ -489,10 +773,7 @@ async function sendMessage(rawText) {
           if (c.id !== state.activeChatId) return c;
           return {
             ...c,
-            messages: c.messages.map((m) => {
-              if (m.id !== streamingMessageId) return m;
-              return { ...m, content: finalText || m.content || "_(empty response)_", streaming: false };
-            })
+            messages: c.messages.map((m) => (m.id === finalizedId ? { ...m, content: finalText || m.content || "_(empty response)_", streaming: false } : m))
           };
         })
       };
@@ -552,14 +833,19 @@ function appendStreamingDelta(delta) {
 async function createProject() {
   const count = state.projects.length + 1;
   const defaultName = `New Project ${count}`;
-  const name = window.prompt("Project name", defaultName);
+  const name = await showCustomPrompt({ title: "New Project", message: "Enter a name for the new project:", defaultValue: defaultName });
   if (name == null) return; // cancelled
   let workspacePath = "";
   try {
     workspacePath = (await window.orbit?.selectWorkspaceDir?.()) || "";
   } catch { /* user cancelled or no picker */ }
   if (!workspacePath) {
-    const proceed = window.confirm("No folder selected. Create the project anyway? (You can attach a folder later from the project chip.)");
+    const proceed = await showCustomConfirm({
+      title: "No Folder Selected",
+      message: "Create the project anyway? (You can attach a folder later from the project chip.)",
+      confirmText: "Create Project",
+      cancelText: "Cancel"
+    });
     if (!proceed) return;
   }
   const now = new Date().toISOString();
@@ -601,10 +887,10 @@ async function changeProjectFolder(projectId) {
   toast(`Folder set: ${basename(workspacePath)}`, "success");
 }
 
-function renameProject(projectId) {
+async function renameProject(projectId) {
   const project = state.projects.find((p) => p.id === projectId);
   if (!project) return;
-  const next = window.prompt("Rename project", project.name);
+  const next = await showCustomPrompt({ title: "Rename Project", message: "Enter new name for the project:", defaultValue: project.name });
   if (next == null) return;
   state = {
     ...state,
@@ -614,11 +900,71 @@ function renameProject(projectId) {
   persistState();
 }
 
-function renameChat(chatId) {
+async function deleteChat(chatId) {
+  const project = getActiveProject(state);
+  const chat = project?.chats.find((c) => c.id === chatId);
+  if (!project || !chat) return;
+  const proceed = await showCustomConfirm({
+    title: "Delete Conversation",
+    message: `Delete "${chat.title}"?\n\nThis will remove the conversation and its messages permanently.`,
+    isDanger: true,
+    confirmText: "Delete",
+    cancelText: "Cancel"
+  });
+  if (!proceed) return;
+  const remaining = project.chats.filter((c) => c.id !== chatId);
+  // If we just deleted the last chat in this project, leave one empty chat
+  // behind so the user always has something to type into.
+  const nextChats = remaining.length > 0
+    ? remaining
+    : [{ id: crypto.randomUUID(), title: "New Conversation", createdAt: new Date().toISOString(), messages: [] }];
+  const newActiveId = state.activeChatId === chatId ? nextChats[nextChats.length - 1].id : state.activeChatId;
+  state = {
+    ...state,
+    activeChatId: newActiveId,
+    projects: state.projects.map((p) => (p.id === project.id ? { ...p, chats: nextChats } : p))
+  };
+  // If the streaming response targeted this chat, drop the in-flight marker
+  // so the next AI response can't write to a dead chat.
+  if (streamingMessageId) streamingMessageId = null;
+  render();
+  persistState();
+  toast(`Deleted "${chat.title}"`, "success");
+}
+
+async function deleteProject(projectId) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  if (state.projects.length === 1) {
+    toast("Can't delete the only project. Create another first.", "error", 4000);
+    return;
+  }
+  const proceed = await showCustomConfirm({
+    title: "Delete Project",
+    message: `Delete project "${project.name}"?\n\nAll ${project.chats.length} conversation(s) inside will be permanently deleted.`,
+    isDanger: true,
+    confirmText: "Delete Project",
+    cancelText: "Cancel"
+  });
+  if (!proceed) return;
+  const remaining = state.projects.filter((p) => p.id !== projectId);
+  const nextActive = remaining[0];
+  state = {
+    ...state,
+    projects: remaining,
+    activeProjectId: state.activeProjectId === projectId ? nextActive.id : state.activeProjectId,
+    activeChatId: state.activeProjectId === projectId ? nextActive.chats[0]?.id : state.activeChatId
+  };
+  render();
+  persistState();
+  toast(`Deleted "${project.name}"`, "success");
+}
+
+async function renameChat(chatId) {
   const project = getActiveProject(state);
   const chat = project?.chats.find((c) => c.id === chatId);
   if (!chat) return;
-  const next = window.prompt("Rename conversation", chat.title);
+  const next = await showCustomPrompt({ title: "Rename Conversation", message: "Enter new name for the conversation:", defaultValue: chat.title });
   if (next == null) return;
   state = {
     ...state,
@@ -1064,6 +1410,437 @@ async function toggleViewMode() {
 }
 
 // ─── Coordinate calibration (mirrors overlay version) ───────────────────
+// Shared modal helper. Returns { backdrop, body, close } so callers can fill
+// the body and close on demand.
+function openModal({ title, width = 520 } = {}) {
+  const old = document.getElementById("orbitGenericModal");
+  if (old) old.remove();
+  const backdrop = document.createElement("div");
+  backdrop.id = "orbitGenericModal";
+  backdrop.className = "modal-backdrop";
+  const modal = document.createElement("div");
+  modal.className = "modal modal-generic";
+  modal.style.width = `${width}px`;
+  modal.style.maxWidth = "92vw";
+  modal.innerHTML = `
+    <div class="modal-header">
+      <h3></h3>
+      <button class="modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body"></div>
+  `;
+  modal.querySelector("h3").textContent = title || "";
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  modal.querySelector(".modal-close").addEventListener("click", close);
+  return { backdrop, body: modal.querySelector(".modal-body"), close };
+}
+
+function showCustomConfirm({ title = "Confirm", message = "", isDanger = false, confirmText = "Confirm", cancelText = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "dialog-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal-dialog";
+    modal.innerHTML = `
+      <div class="dialog-header"></div>
+      <div class="dialog-body">
+        <div class="dialog-body-text"></div>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="dialog-btn dialog-btn-cancel"></button>
+        <button type="button" class="dialog-btn"></button>
+      </div>
+    `;
+    modal.querySelector(".dialog-header").textContent = title;
+    modal.querySelector(".dialog-body-text").textContent = message;
+    
+    const btnCancel = modal.querySelector(".dialog-btn-cancel");
+    btnCancel.textContent = cancelText;
+    
+    const btnConfirm = modal.querySelector(".dialog-footer .dialog-btn:not(.dialog-btn-cancel)");
+    btnConfirm.textContent = confirmText;
+    btnConfirm.className = `dialog-btn ${isDanger ? "dialog-btn-danger" : "dialog-btn-confirm"}`;
+
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    requestAnimationFrame(() => {
+      backdrop.classList.add("show");
+    });
+
+    let cleanup = (value) => {
+      backdrop.classList.remove("show");
+      setTimeout(() => {
+        backdrop.remove();
+        const promptInput = document.getElementById("promptInput");
+        if (promptInput) promptInput.focus();
+        resolve(value);
+      }, 180);
+    };
+
+    btnCancel.addEventListener("click", () => cleanup(false));
+    btnConfirm.addEventListener("click", () => cleanup(true));
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) cleanup(false);
+    });
+
+    const handleKeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        cleanup(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+    const originalCleanup = cleanup;
+    cleanup = (val) => {
+      window.removeEventListener("keydown", handleKeydown);
+      originalCleanup(val);
+    };
+
+    btnConfirm.focus();
+  });
+}
+
+function showCustomPrompt({ title = "Input Required", message = "", defaultValue = "", placeholder = "", confirmText = "OK", cancelText = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "dialog-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal-dialog";
+    modal.innerHTML = `
+      <div class="dialog-header"></div>
+      <div class="dialog-body">
+        <div class="dialog-body-text" style="display: none;"></div>
+        <input type="text" class="dialog-input" />
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="dialog-btn dialog-btn-cancel"></button>
+        <button type="button" class="dialog-btn dialog-btn-confirm"></button>
+      </div>
+    `;
+    modal.querySelector(".dialog-header").textContent = title;
+    if (message) {
+      const msgEl = modal.querySelector(".dialog-body-text");
+      msgEl.textContent = message;
+      msgEl.style.display = "block";
+    }
+    
+    const input = modal.querySelector(".dialog-input");
+    input.value = defaultValue;
+    input.placeholder = placeholder;
+    
+    const btnCancel = modal.querySelector(".dialog-btn-cancel");
+    btnCancel.textContent = cancelText;
+    
+    const btnConfirm = modal.querySelector(".dialog-btn-confirm");
+    btnConfirm.textContent = confirmText;
+
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    requestAnimationFrame(() => {
+      backdrop.classList.add("show");
+      input.focus();
+      input.select();
+    });
+
+    let cleanup = (value) => {
+      backdrop.classList.remove("show");
+      setTimeout(() => {
+        backdrop.remove();
+        const promptInput = document.getElementById("promptInput");
+        if (promptInput) promptInput.focus();
+        resolve(value);
+      }, 180);
+    };
+
+    btnCancel.addEventListener("click", () => cleanup(null));
+    btnConfirm.addEventListener("click", () => cleanup(input.value));
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) cleanup(null);
+    });
+
+    const handleKeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        cleanup(input.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+    const originalCleanup = cleanup;
+    cleanup = (val) => {
+      window.removeEventListener("keydown", handleKeydown);
+      originalCleanup(val);
+    };
+  });
+}
+
+// History: every conversation across every project, newest first.
+function openHistoryModal() {
+  const { body, close } = openModal({ title: "Conversation History", width: 580 });
+  const entries = [];
+  for (const project of state.projects) {
+    for (const chat of project.chats) {
+      entries.push({ projectId: project.id, projectName: project.name, chat });
+    }
+  }
+  entries.sort((a, b) => new Date(b.chat.createdAt) - new Date(a.chat.createdAt));
+  if (!entries.length) {
+    body.innerHTML = `<p class="muted-row" style="padding:0;">No conversations yet.</p>`;
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "history-list";
+  entries.forEach((e) => {
+    const msgCount = (e.chat.messages || []).filter((m) => !m.isToolResult).length;
+    const row = document.createElement("div");
+    row.className = "history-row";
+    row.innerHTML = `
+      <div class="history-row-main">
+        <div class="history-row-title"></div>
+        <div class="history-row-sub"></div>
+      </div>
+      <div class="history-row-meta">
+        <span class="history-row-age"></span>
+        <button type="button" class="row-delete" title="Delete">×</button>
+      </div>
+    `;
+    row.querySelector(".history-row-title").textContent = e.chat.title;
+    row.querySelector(".history-row-sub").textContent = `${e.projectName} · ${msgCount} msg`;
+    row.querySelector(".history-row-age").textContent = formatAge(e.chat.createdAt);
+    row.addEventListener("click", () => {
+      state = { ...state, activeProjectId: e.projectId, activeChatId: e.chat.id };
+      render();
+      persistState();
+      close();
+    });
+    row.querySelector(".row-delete").addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      // Use the same confirm + deletion path that the sidebar uses, but
+      // scoped via the entry's project (not necessarily the active one).
+      const proj = state.projects.find((p) => p.id === e.projectId);
+      if (!proj) return;
+      const proceed = await showCustomConfirm({
+        title: "Delete Conversation",
+        message: `Delete "${e.chat.title}" from "${e.projectName}"?`,
+        isDanger: true,
+        confirmText: "Delete",
+        cancelText: "Cancel"
+      });
+      if (!proceed) return;
+      const remaining = proj.chats.filter((c) => c.id !== e.chat.id);
+      const replacement = remaining.length > 0
+        ? remaining
+        : [{ id: crypto.randomUUID(), title: "New Conversation", createdAt: new Date().toISOString(), messages: [] }];
+      state = {
+        ...state,
+        projects: state.projects.map((p) => (p.id === e.projectId ? { ...p, chats: replacement } : p)),
+        activeChatId: state.activeChatId === e.chat.id ? replacement[replacement.length - 1].id : state.activeChatId
+      };
+      render();
+      persistState();
+      row.remove();
+    });
+    list.append(row);
+  });
+  body.append(list);
+}
+
+// Background Agents (the "Scheduled Tasks" button repurposed): shows live
+// agent count from the main process and lets you deploy ad-hoc agents.
+async function openTasksModal() {
+  const { body } = openModal({ title: "Background Agents", width: 560 });
+  body.innerHTML = `
+    <p style="margin:0 0 10px;font-size:12px;opacity:.75;">Long-running agents work in the background on your behalf. Each one runs up to 12 tool steps autonomously, with full logs under <code>.orbit/agent-&lt;id&gt;.log</code> inside the active project's folder.</p>
+    <div id="agentsStatus" class="agent-status">Loading…</div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+      <input id="agentTaskInput" placeholder="Describe a task for a new agent…" style="flex:1;min-width:240px;padding:6px 10px;background:var(--bg-soft);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;">
+      <button type="button" id="agentDeployBtn" class="modal-btn">Deploy 1</button>
+      <button type="button" id="agentDeploy3Btn" class="modal-btn">Deploy 3</button>
+    </div>
+    <p id="agentDeployStatus" style="margin:10px 0 0;font-size:11px;opacity:.7;min-height:14px;"></p>
+  `;
+  const refresh = async () => {
+    try {
+      const n = await window.orbit?.getActiveAgentsCount?.();
+      const count = typeof n === "number" ? n : 0;
+      body.querySelector("#agentsStatus").innerHTML = count > 0
+        ? `<span class="agent-dot is-running"></span> ${count} agent${count === 1 ? "" : "s"} currently running.`
+        : `<span class="agent-dot"></span> No agents are running right now.`;
+    } catch {
+      body.querySelector("#agentsStatus").textContent = "(could not read agent count)";
+    }
+  };
+  await refresh();
+  const interval = setInterval(refresh, 4000);
+  // Stop polling when modal goes away.
+  const observer = new MutationObserver(() => {
+    if (!document.getElementById("orbitGenericModal")) {
+      clearInterval(interval);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true });
+
+  const deploy = async (n) => {
+    const task = body.querySelector("#agentTaskInput").value.trim();
+    const status = body.querySelector("#agentDeployStatus");
+    if (!task) { status.textContent = "Type a task description first."; return; }
+    const workspacePath = getActiveProject(state)?.workspacePath;
+    if (!workspacePath) { status.textContent = "Active project has no folder. Set one in the chat header first."; return; }
+    status.textContent = `Deploying ${n}…`;
+    const results = await Promise.all(Array.from({ length: n }, () =>
+      window.orbit.deployAgent({ workspacePath, task, model: selectedModel }).catch((e) => ({ ok: false, error: e?.message }))
+    ));
+    const ok = results.filter((r) => r && r.ok).length;
+    status.textContent = `Deployed ${ok}/${n}. Logs in ${workspacePath}\\.orbit\\`;
+    refresh();
+  };
+  body.querySelector("#agentDeployBtn").addEventListener("click", () => deploy(1));
+  body.querySelector("#agentDeploy3Btn").addEventListener("click", () => deploy(3));
+}
+
+// Settings: real, persisted preferences.
+function openSettingsModal() {
+  const { body, close } = openModal({ title: "Settings", width: 520 });
+  body.innerHTML = `
+    <div class="settings-row">
+      <label>Default model</label>
+      <select id="setDefaultModel">
+        <option>Auto</option><option>Voyager 1 Flash</option><option>Voyager 1</option>
+        <option>Voyager 2</option><option>Voyager 2 Pro</option><option>Voyager 2.1 Preview</option>
+        <option>Orchestra 1.1</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Default mode</label>
+      <select id="setDefaultMode">
+        <option value="ask">Ask</option>
+        <option value="agents">Agents</option>
+        <option value="planning">Planning</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Auto-attach screenshot to every message</label>
+      <input type="checkbox" id="setAttachShot">
+    </div>
+    <div class="settings-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px;">
+      <label>Storage</label>
+      <button type="button" id="setClearAll" class="modal-btn" style="border-color:rgba(239,68,68,0.4);color:#fda4af;">Clear all projects &amp; chats</button>
+    </div>
+    <p style="margin:10px 0 0;font-size:11px;opacity:.6;">Changes save instantly.</p>
+  `;
+  body.querySelector("#setDefaultModel").value = selectedModel;
+  body.querySelector("#setDefaultMode").value = currentMode;
+  body.querySelector("#setAttachShot").checked = attachScreenshot;
+
+  body.querySelector("#setDefaultModel").addEventListener("change", (e) => {
+    setSelectedModel(e.target.value);
+    toast(`Default model: ${selectedModel}`, "success", 1800);
+  });
+  body.querySelector("#setDefaultMode").addEventListener("change", (e) => {
+    setMode(e.target.value);
+    toast(`Default mode: ${currentMode}`, "success", 1800);
+  });
+  body.querySelector("#setAttachShot").addEventListener("change", (e) => {
+    attachScreenshot = e.target.checked;
+    updateScreenshotToggleUI();
+    persistState();
+  });
+  body.querySelector("#setClearAll").addEventListener("click", async () => {
+    const proceed = await showCustomConfirm({
+      title: "Clear All Data",
+      message: "Delete ALL projects and conversations? This cannot be undone.",
+      isDanger: true,
+      confirmText: "Clear All",
+      cancelText: "Cancel"
+    });
+    if (!proceed) return;
+    localStorage.removeItem(STORAGE_KEY);
+    state = loadState();
+    selectedModel = DEFAULT_MODEL;
+    currentMode = "ask";
+    attachScreenshot = false;
+    setSelectedModel(selectedModel);
+    setMode(currentMode);
+    updateScreenshotToggleUI();
+    render();
+    persistState();
+    close();
+    toast("All data cleared", "success");
+  });
+}
+
+// File / View / Window menus at the top.
+function openTopMenu(name, anchorRect) {
+  if (!menuDropdown) return;
+  const items = {
+    file: [
+      { label: "New Conversation", run: () => newChatButton.click() },
+      { label: "New Project…", run: () => createProject() },
+      { label: "Open Folder for Project…", run: () => changeProjectFolder(state.activeProjectId) },
+      { label: "Export Chat as Markdown", run: () => exportActiveChatMarkdown() }
+    ],
+    view: [
+      { label: "Open Overlay Mode", run: () => toggleViewMode() },
+      { label: "Conversation History", run: () => openHistoryModal() },
+      { label: "Background Agents", run: () => openTasksModal() }
+    ],
+    window: [
+      { label: "Minimize", run: () => window.orbit?.minimizeWindow?.() },
+      { label: "Maximize / Restore", run: () => window.orbit?.toggleMaximizeWindow?.() },
+      { label: "Close", run: () => window.orbit?.closeWindow?.() }
+    ]
+  }[name];
+  if (!items) return;
+  menuDropdown.innerHTML = items.map((it, i) =>
+    `<div class="menu-dropdown-item" data-idx="${i}">${escapeHtml(it.label)}</div>`
+  ).join("");
+  menuDropdown.style.left = `${anchorRect.left}px`;
+  menuDropdown.style.top = `${anchorRect.bottom + 4}px`;
+  menuDropdown.hidden = false;
+  menuDropdown.querySelectorAll(".menu-dropdown-item").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const idx = parseInt(el.dataset.idx, 10);
+      menuDropdown.hidden = true;
+      items[idx].run();
+    });
+  });
+}
+
+function exportActiveChatMarkdown() {
+  const chat = getActiveChat(state);
+  if (!chat) return;
+  const lines = [`# ${chat.title}`, "", `_Exported ${new Date().toLocaleString()}_`, ""];
+  for (const m of chat.messages) {
+    if (m.isToolResult) continue;
+    lines.push(`## ${m.role === "user" ? "You" : "Voyager"} — ${new Date(m.timestamp).toLocaleTimeString()}`);
+    lines.push("");
+    lines.push(m.content || "");
+    lines.push("");
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${chat.title.replace(/[^a-z0-9-_]+/gi, "_")}.md`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("Exported chat as Markdown", "success");
+}
+
 function openCalibrationModal() {
   const old = document.getElementById("appCalModal");
   if (old) old.remove();
@@ -1169,7 +1946,16 @@ function render() {
   renderConversations();
   renderFiles();
   renderMessages();
+  // After the DOM settles, see if any tool cards want to auto-fire.
+  setTimeout(maybeAutoFireTools, 0);
 }
+
+// Esc closes the topmost modal so users don't get stuck.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const modal = document.querySelector(".modal-backdrop");
+  if (modal) { modal.remove(); e.preventDefault(); }
+});
 
 // ─── Event wiring ───────────────────────────────────────────────────────
 newChatButton.addEventListener("click", () => {
@@ -1181,7 +1967,22 @@ newChatButton.addEventListener("click", () => {
 
 addProjectButton.addEventListener("click", createProject);
 addFileButton.addEventListener("click", addFilesToProject);
-settingsButton.addEventListener("click", () => toast("Settings panel coming soon", "default", 2500));
+historyButton.addEventListener("click", openHistoryModal);
+tasksButton.addEventListener("click", openTasksModal);
+settingsButton.addEventListener("click", openSettingsModal);
+
+// Top-bar menu dropdowns
+document.querySelectorAll(".menu-item").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = btn.dataset.menu;
+    const rect = btn.getBoundingClientRect();
+    openTopMenu(menu, rect);
+  });
+});
+document.addEventListener("click", () => {
+  if (menuDropdown && !menuDropdown.hidden) menuDropdown.hidden = true;
+});
 
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();

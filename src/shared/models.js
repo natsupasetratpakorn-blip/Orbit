@@ -2,9 +2,9 @@ export const MODELS = [
   "Auto",
   "Voyager 1",
   "Voyager 1 Flash",
-  "Voyager 2 Preview",
+  "Voyager 2",
   "Voyager 2 Pro",
-  "Voyager 2.1",
+  "Voyager 2.1 Preview",
   "Orchestra 1.1"
 ];
 export const DEFAULT_MODEL = "Voyager 1 Flash";
@@ -12,9 +12,9 @@ export const DEFAULT_MODEL = "Voyager 1 Flash";
 export const MODEL_IDS = {
   "Voyager 1": "gemini-2.5-flash",
   "Voyager 1 Flash": "gemini-2.5-flash-lite",
-  "Voyager 2 Preview": "gemini-3.1-flash-lite",
+  "Voyager 2": "gemini-3.1-flash-lite",
   "Voyager 2 Pro": "gemini-3.1-pro",
-  "Voyager 2.1": "gemini-3.5-flash",
+  "Voyager 2.1 Preview": "gemini-3.5-flash",
   "Orchestra 1.1": "gemini-2.5-flash-lite"
 };
 
@@ -30,7 +30,7 @@ export function routeAutoModel({ text = "", mode = "ask", agentMode = false } = 
 
   if (mode === "planning") return "Orchestra 1.1";
   if (agentMode || hasCodeFence || hasCodeyKeyword || isLong) {
-    return "Voyager 2.1";
+    return "Voyager 2.1 Preview";
   }
   return "Voyager 1 Flash";
 }

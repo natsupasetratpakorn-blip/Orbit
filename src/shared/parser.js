@@ -12,7 +12,7 @@ export function parseAIResponse(content) {
   // 7. <click_pixel x="..." y="..." />
   // 8. <open_browser url="..." />
   // 9. <deploy_agent task="..." />
-  const regex = /<(execute_command|run_command|shell|bash|write_file|create_file|edit_file|update_file|patch_file|read_file|open_file|type_text|open_browser|deploy_agent|search_workspace|grep_workspace|find_in_files)(?:\s+(?:path|window|url|task|mode)="([^"]+)")?\s*>([\s\S]*?)<\/\1>|<(?:read_file|open_file)\s+path="([^"]+)"\s*\/>|<(list_workspace|scan_workspace|list_files|list_windows|list_apps|list_applications)\s*\/>|<click_pixel\s+x="(\d+)"\s+y="(\d+)"\s*\/>|<open_browser\s+url="([^"]+)"\s*\/>|<deploy_agent\s+task="([^"]+)"\s*\/>/gs;
+  const regex = /<(execute_command|run_command|shell|bash|write_file|create_file|edit_file|update_file|patch_file|read_file|open_file|type_text|open_browser|deploy_agent|search_workspace|grep_workspace|find_in_files|keystroke)(?:\s+(?:path|window|url|task|mode|shell)="([^"]+)")?\s*>([\s\S]*?)<\/\1>|<(?:read_file|open_file)\s+path="([^"]+)"\s*\/>|<(list_workspace|scan_workspace|list_files|list_windows|list_apps|list_applications)\s*\/>|<click_pixel\s+x="(\d+)"\s+y="(\d+)"\s*\/>|<open_browser\s+url="([^"]+)"\s*\/>|<deploy_agent\s+task="([^"]+)"\s*\/>|<scroll\s+x="(\d+)"\s+y="(\d+)"\s+ticks="(-?\d+)"\s*\/>|<focus_window\s+title="([^"]+)"\s*\/>|<wait(?:_ms)?\s+ms="(\d+)"\s*\/>|<(right_click|double_click)\s+x="(\d+)"\s+y="(\d+)"\s*\/>/gs;
 
   // Canonicalize aliases so downstream rendering/execution only deals with the
   // four canonical types.
@@ -35,7 +35,28 @@ export function parseAIResponse(content) {
       parts.push({ type: "text", content: textBefore });
     }
 
-    if (match[6] && match[7]) {
+    if (match[17] && match[18] && match[19]) {
+      // <right_click /> or <double_click /> — sugar over click_pixel
+      const kind = match[17];
+      parts.push({
+        type: "click_pixel",
+        x: parseInt(match[18], 10),
+        y: parseInt(match[19], 10),
+        button: kind === "right_click" ? "right" : "left",
+        count: kind === "double_click" ? 2 : 1
+      });
+    } else if (match[16]) {
+      parts.push({ type: "wait_ms", ms: parseInt(match[16], 10) });
+    } else if (match[15]) {
+      parts.push({ type: "focus_window", window: match[15] });
+    } else if (match[10] && match[11] && match[12]) {
+      parts.push({
+        type: "scroll",
+        x: parseInt(match[10], 10),
+        y: parseInt(match[11], 10),
+        ticks: parseInt(match[12], 10)
+      });
+    } else if (match[6] && match[7]) {
       // click_pixel
       parts.push({
         type: "click_pixel",
@@ -72,6 +93,15 @@ export function parseAIResponse(content) {
       // title — semantically not a file path, so keep it on its own field.
       if (type === "type_text") {
         parts.push({ type, window: attr, content: code });
+      } else if (type === "keystroke") {
+        parts.push({ type, window: attr, content: code });
+      } else if (type === "execute_command") {
+        // Optional shell="cmd|powershell|bash" attribute selects the interpreter.
+        // Preserve the historical `path: undefined` field so downstream consumers
+        // and snapshot tests don't break.
+        const node = { type, path: undefined, content: code };
+        if (attr) node.shell = attr;
+        parts.push(node);
       } else if (type === "open_browser") {
         parts.push({ type, url: attr, content: code });
       } else if (type === "deploy_agent") {

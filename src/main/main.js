@@ -212,8 +212,25 @@ function setOverlayState(state) {
   }
 
   const start = overlayWindow.getBounds();
-  const targetX = currentDisplay.workArea.x + calculated.x;
-  const targetY = currentDisplay.workArea.y + calculated.y;
+  let targetX, targetY;
+  if (isFloatingOverlay) {
+    const widthDiff = calculated.width - start.width;
+    targetX = Math.round(start.x - (widthDiff / 2));
+    targetY = start.y;
+
+    // Clamp within display work area to ensure it doesn't get cut off or lost off-screen
+    const minX = currentDisplay.workArea.x;
+    const maxX = currentDisplay.workArea.x + currentDisplay.workArea.width - calculated.width;
+    targetX = Math.min(Math.max(targetX, minX), Math.max(minX, maxX));
+
+    const minY = currentDisplay.workArea.y;
+    const maxY = currentDisplay.workArea.y + currentDisplay.workArea.height - calculated.height;
+    targetY = Math.min(Math.max(targetY, minY), Math.max(minY, maxY));
+  } else {
+    targetX = currentDisplay.workArea.x + calculated.x;
+    targetY = currentDisplay.workArea.y + calculated.y;
+  }
+
   const targetBounds = {
     x: targetX,
     y: targetY,
@@ -230,8 +247,9 @@ function setOverlayState(state) {
 
   const heightDelta = targetBounds.height - start.height;
   const xDelta      = targetBounds.x     - start.x;
+  const yDelta      = targetBounds.y     - start.y;
   const widDelta    = targetBounds.width  - start.width;
-  const shouldAnimate = Math.abs(heightDelta) > 20 || Math.abs(widDelta) > 20;
+  const shouldAnimate = Math.abs(heightDelta) > 20 || Math.abs(widDelta) > 20 || Math.abs(yDelta) > 20;
 
   if (!shouldAnimate) {
     overlayWindow.setBounds(targetBounds);
@@ -242,7 +260,7 @@ function setOverlayState(state) {
       const t = easeOutCubic(Math.min(step / totalSteps, 1));
       overlayWindow.setBounds({
         x:      Math.round(start.x      + xDelta      * t),
-        y:      start.y,
+        y:      Math.round(start.y      + yDelta      * t),
         width:  Math.round(start.width  + widDelta    * t),
         height: Math.round(start.height + heightDelta * t)
       });
@@ -1075,7 +1093,7 @@ function registerIpc() {
 
     const mode = lineBreak === "tab" ? "tab" : lineBreak === "none" ? "none" : "enter";
     const delay = Number.isFinite(lineDelayMs) ? Math.max(0, Math.min(2000, lineDelayMs)) : 60;
-    const charDelay = Number.isFinite(charDelayMs) ? Math.max(0, Math.min(1000, charDelayMs)) : 15;
+    const charDelay = Number.isFinite(charDelayMs) ? Math.max(0, Math.min(1000, charDelayMs)) : 8;
 
     // Normalize newlines, then split. \r\n and \r both become \n first.
     const normalized = text.replace(/\r\n?/g, "\n");

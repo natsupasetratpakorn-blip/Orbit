@@ -75,6 +75,65 @@ function listWorkspaceFiles(dir, baseDir = dir) {
   return results;
 }
 
+// Helper to search files recursively for pattern matching (grep)
+function searchWorkspaceFiles(dir, query, isRegex = false, baseDir = dir) {
+  let results = [];
+  try {
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+      if (file === "node_modules" || file === ".git" || file === "dist-app" || file === "build" || file === ".orbit") {
+        continue;
+      }
+      const fullPath = path.join(dir, file);
+      const stat = fs.statSync(fullPath);
+      if (stat && stat.isDirectory()) {
+        results = results.concat(searchWorkspaceFiles(fullPath, query, isRegex, baseDir));
+      } else {
+        const ext = path.extname(fullPath).toLowerCase();
+        if ([".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".json", ".md", ".py", ".sh", ".bat", ".ps1", ".yaml", ".yml", ".txt", ".cjs", ".mjs"].includes(ext)) {
+          const content = fs.readFileSync(fullPath, "utf8");
+          let match = false;
+          if (isRegex) {
+            try {
+              const rx = new RegExp(query, "i");
+              match = rx.test(content);
+            } catch {
+              match = content.toLowerCase().includes(query.toLowerCase());
+            }
+          } else {
+            match = content.toLowerCase().includes(query.toLowerCase());
+          }
+          if (match) {
+            const relPath = path.relative(baseDir, fullPath);
+            const lines = content.split(/\r?\n/);
+            const matches = [];
+            lines.forEach((line, index) => {
+              let isLineMatch = false;
+              if (isRegex) {
+                try {
+                  const rx = new RegExp(query, "i");
+                  isLineMatch = rx.test(line);
+                } catch {
+                  isLineMatch = line.toLowerCase().includes(query.toLowerCase());
+                }
+              } else {
+                isLineMatch = line.toLowerCase().includes(query.toLowerCase());
+              }
+              if (isLineMatch) {
+                matches.push({ lineNum: index + 1, content: line.trim() });
+              }
+            });
+            results.push({ file: relPath, matches });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // Ignore error
+  }
+  return results;
+}
+
 // Helper to get GCP token
 let _cachedToken = null;
 let _tokenFetchedAt = 0;
@@ -227,6 +286,10 @@ COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
 
 5. List all files in the workspace:
 <list_workspace />
+
+6. Search workspace files for text pattern or regular expression:
+<search_workspace mode="regex|literal">query</search_workspace>
+(aliases: <grep_workspace>, <find_in_files>)
 
 ====== RULES ======
 - Prefer <patch_file> over <write_file> for existing files. Rewriting large files whole risks truncation and data loss.
@@ -466,6 +529,30 @@ COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
           } catch (listErr) {
             log(`Error listing workspace: ${listErr.message}`);
             combinedResults.push(`[TOOL_RESULT: list_workspace (FAILED)]\nError: ${listErr.message}`);
+          }
+        } else if (tool.type === "search_workspace") {
+          try {
+            const query = tool.query || "";
+            const isRegex = tool.mode === "regex";
+            log(`Searching workspace for pattern "${query}" (regex: ${isRegex})...`);
+            if (!query) {
+              combinedResults.push(`[TOOL_RESULT: search_workspace (FAILED)]\nError: Query cannot be empty.`);
+            } else {
+              const matches = searchWorkspaceFiles(workspaceRoot, query, isRegex);
+              if (matches.length === 0) {
+                combinedResults.push(`[TOOL_RESULT: search_workspace]\nNo matches found for "${query}".`);
+              } else {
+                let matchText = matches.map(m => {
+                  const details = m.matches.slice(0, 10).map(line => `  L${line.lineNum}: ${line.content}`).join("\n");
+                  const truncatedNotice = m.matches.length > 10 ? `\n  [Truncated ${m.matches.length - 10} more matches in this file]` : "";
+                  return `- ${m.file}:\n${details}${truncatedNotice}`;
+                }).join("\n\n");
+                combinedResults.push(`[TOOL_RESULT: search_workspace]\n${truncateToolOutput(matchText)}`);
+              }
+            }
+          } catch (searchErr) {
+            log(`Error searching workspace: ${searchErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: search_workspace (FAILED)]\nError: ${searchErr.message}`);
           }
         } else {
           log(`Warning: Unrecognized tool type: ${tool.type}`);
