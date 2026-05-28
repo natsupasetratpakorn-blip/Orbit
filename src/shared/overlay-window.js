@@ -26,7 +26,7 @@ export function getOverlayBounds({ displayWidth, displayHeight = 900, state }) {
   const height = state === "expanded"
     ? EXPANDED_HEIGHT
     : state === "dropdown-open"
-      ? 230
+      ? 480
       : state === "hover"
         ? HOVER_HEIGHT
         : BAR_HEIGHT;

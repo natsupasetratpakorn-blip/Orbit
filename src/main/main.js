@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, screen, dialog, session, shell, Tray, Menu, globalShortcut, clipboard } from "electron";
-import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, stat as statAsync, unlink } from "node:fs/promises";
 import { existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1366,9 +1366,32 @@ function sweepServiceWorkerCacheIfOversized() {
   }
 }
 
+// Prune userData/screenshots so it doesn't grow without bound. Keeps the most
+// recent N files, deletes the rest. Best-effort — never throws to the app.
+async function pruneScreenshotsDir(maxKeep = 100) {
+  try {
+    const dir = join(app.getPath("userData"), "screenshots");
+    if (!existsSync(dir)) return;
+    const names = await readdir(dir);
+    if (names.length <= maxKeep) return;
+    const stats = await Promise.all(
+      names.map(async (n) => ({ name: n, mtimeMs: (await statAsync(join(dir, n))).mtimeMs }))
+    );
+    stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const toDelete = stats.slice(maxKeep);
+    await Promise.all(toDelete.map((s) => unlink(join(dir, s.name)).catch(() => {})));
+    if (toDelete.length > 0) {
+      console.log(`[Orbit Main] Pruned ${toDelete.length} old screenshot(s) (kept ${maxKeep}).`);
+    }
+  } catch (err) {
+    console.warn(`[Orbit Main] Screenshot prune failed: ${err.message}`);
+  }
+}
+
 app.whenReady().then(async () => {
   console.log("[Orbit Main] app whenReady fired.");
   sweepServiceWorkerCacheIfOversized();
+  pruneScreenshotsDir().catch(() => {});
 
   // Set up microphone / audio permissions in Electron session
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {

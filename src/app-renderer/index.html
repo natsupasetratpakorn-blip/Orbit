@@ -10,18 +10,24 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <canvas id="solarCanvas" class="solar-canvas" aria-hidden="true"></canvas>
+    <div id="cursorGlow" class="cursor-glow" aria-hidden="true"></div>
+
     <div class="app-shell">
       <header class="titlebar">
         <nav class="menu" aria-label="Application menu">
-          <span class="brand">Orbit</span>
-          <button type="button">File</button>
-          <button type="button">View</button>
-          <button type="button">Window</button>
-          <button id="viewModeButton" class="view-mode-button" type="button">Open Overlay</button>
+          <span class="brand">
+            <span class="brand-dot"></span>
+            Orbit
+          </span>
+          <button type="button" class="menu-item" data-menu="file">File</button>
+          <button type="button" class="menu-item" data-menu="view">View</button>
+          <button type="button" class="menu-item" data-menu="window">Window</button>
+          <button id="viewModeButton" class="view-mode-button" type="button" title="Switch to floating overlay">↗ Overlay</button>
         </nav>
         <div class="window-controls" aria-label="Window controls">
-          <button id="minimizeWindow" type="button" aria-label="Minimize">-</button>
-          <button id="maximizeWindow" type="button" aria-label="Maximize">□</button>
+          <button id="minimizeWindow" type="button" aria-label="Minimize">─</button>
+          <button id="maximizeWindow" type="button" aria-label="Maximize">▢</button>
           <button id="closeWindow" type="button" aria-label="Close">×</button>
         </div>
       </header>
@@ -33,11 +39,11 @@
             <span>New Conversation</span>
           </button>
           <button id="historyButton" class="nav-button" type="button">
-            <span class="nav-icon">○</span>
-            <span>Conversation History</span>
+            <span class="nav-icon">◷</span>
+            <span>History</span>
           </button>
           <button id="tasksButton" class="nav-button" type="button">
-            <span class="nav-icon">◷</span>
+            <span class="nav-icon">◧</span>
             <span>Scheduled Tasks</span>
           </button>
         </div>
@@ -46,11 +52,20 @@
           <div class="section-heading">
             <span>Projects</span>
             <div class="section-actions">
-              <button id="sortProjectsButton" type="button" aria-label="Sort projects">≡</button>
-              <button id="addProjectButton" type="button" aria-label="Add project">+</button>
+              <button id="addProjectButton" type="button" aria-label="Add project" title="New project">+</button>
             </div>
           </div>
           <div id="projectsList" class="projects-list"></div>
+        </section>
+
+        <section class="sidebar-section">
+          <div class="section-heading">
+            <span>Project Files</span>
+            <div class="section-actions">
+              <button id="addFileButton" type="button" aria-label="Attach file to project" title="Attach file">+</button>
+            </div>
+          </div>
+          <div id="filesList" class="files-list"></div>
         </section>
 
         <section class="sidebar-section conversations-section">
@@ -69,9 +84,6 @@
       </aside>
 
       <main class="workspace" aria-label="Conversation workspace">
-        <canvas id="solarCanvas" class="solar-canvas" aria-hidden="true"></canvas>
-        <div class="solar-vignette" aria-hidden="true"></div>
-
         <section id="conversationStage" class="conversation-stage">
           <div id="chatHeader" class="chat-header">
             <button id="activeProjectButton" class="project-chip" type="button">
@@ -79,6 +91,11 @@
               <span id="activeProjectName">Orbit</span>
               <span class="chevron">⌄</span>
             </button>
+            <div class="chat-header-spacer"></div>
+            <div class="chat-header-stats">
+              <span id="chatStatTokens" class="stat-pill" title="Approximate token count of this conversation">0 tk</span>
+              <span id="chatStatMessages" class="stat-pill" title="Number of messages">0 msg</span>
+            </div>
           </div>
 
           <div id="emptyState" class="empty-state">
@@ -86,34 +103,72 @@
               <span></span>
             </div>
             <h1>Where should we point Voyager?</h1>
+            <p class="empty-sub">Ask anything, drop files via <kbd>+</kbd>, or hit <kbd>/</kbd> for commands.</p>
           </div>
 
           <div id="messages" class="messages" aria-live="polite"></div>
 
           <form id="composer" class="composer" autocomplete="off">
-            <textarea id="promptInput" rows="2" placeholder="Ask anything, @ to mention, / for actions" aria-label="Message"></textarea>
+            <div id="attachedFilesRow" class="attached-files-row" hidden></div>
+            <div id="slashMenu" class="slash-menu" hidden></div>
+
+            <textarea id="promptInput" rows="2" placeholder="Ask anything · @ to mention · / for actions" aria-label="Message"></textarea>
+
             <div class="composer-toolbar">
               <div class="composer-left">
-                <button id="attachButton" type="button" aria-label="Attach context">+</button>
-                <select id="modelSelect" aria-label="AI model">
-                  <option>Voyager 1 Flash</option>
-                  <option>Voyager 1</option>
-                  <option>Voyager 2 Preview</option>
-                  <option>Voyager 2 Pro</option>
-                  <option>Orchestra 1.1</option>
-                </select>
+                <button id="attachButton" type="button" class="round-button" aria-label="Attach files" title="Attach file or screenshot">+</button>
+                <button id="regionButton" type="button" class="round-button" aria-label="Capture region" title="Capture screen region">▭</button>
+                <div class="custom-select-container" id="appModelSelectContainer">
+                  <button id="modelSelectBtn" type="button" class="model-pill" aria-label="AI model">
+                    <span id="modelSelectLabel">Voyager 1 Flash</span> <span class="chevron-tiny">▾</span>
+                  </button>
+                  <div id="modelSelectOptions" class="model-options" hidden>
+                    <div class="custom-select-option" data-value="Auto">⊛ Auto</div>
+                    <div class="custom-select-category" data-category="voyager-1">
+                      <div class="custom-select-category-header">
+                        <span>✧ Voyager 1</span>
+                        <span class="cat-arrow">›</span>
+                      </div>
+                      <div class="custom-select-submenu">
+                        <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
+                        <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
+                      </div>
+                    </div>
+                    <div class="custom-select-category" data-category="voyager-2">
+                      <div class="custom-select-category-header">
+                        <span>◈ Voyager 2</span>
+                        <span class="cat-arrow">›</span>
+                      </div>
+                      <div class="custom-select-submenu">
+                        <div class="custom-select-option" data-value="Voyager 2 Preview">✦ Voyager 2 Preview</div>
+                        <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
+                        <div class="custom-select-option" data-value="Voyager 2.1">◈ Voyager 2.1</div>
+                      </div>
+                    </div>
+                    <div class="custom-select-category" data-category="orchestra">
+                      <div class="custom-select-category-header">
+                        <span>❖ Orchestra</span>
+                        <span class="cat-arrow">›</span>
+                      </div>
+                      <div class="custom-select-submenu">
+                        <div class="custom-select-option" data-value="Orchestra 1.1">❖ Orchestra 1.1</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button id="modeButton" type="button" class="mode-pill" data-mode="ask" title="Switch mode (Ask / Agents / Planning)">❯ Ask</button>
               </div>
               <div class="composer-right">
-                <button id="composerModeButton" class="overlay-command-button" type="button">Open Overlay</button>
-                <button id="localModeButton" class="mode-pill" type="button">Local</button>
-                <button id="micButton" class="round-button" type="button" aria-label="Voice input">
+                <button id="screenshotToggleButton" type="button" class="round-button" aria-label="Toggle screenshot context" title="Auto-attach screenshot">▦</button>
+                <canvas id="micVisualizer" class="mic-visualizer" hidden></canvas>
+                <button id="micButton" type="button" class="round-button" aria-label="Voice input" title="Voice input">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="3" width="6" height="10" rx="3"></rect>
                     <path d="M5 11a7 7 0 0 0 14 0"></path>
                     <path d="M12 18v3"></path>
                   </svg>
                 </button>
-                <button id="sendButton" class="send-button" type="submit" aria-label="Send">
+                <button id="sendButton" class="send-button" type="submit" aria-label="Send" title="Send">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M5 12h13"></path>
                     <path d="m13 6 6 6-6 6"></path>

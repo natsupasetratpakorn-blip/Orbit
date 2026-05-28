@@ -133,10 +133,9 @@ const AGENT_INSTRUCTIONS =
 // the model in casual chat mode tries to ask the user to "emit a tag" which
 // is nonsense from the user's POV.
 const READ_ONLY_TOOLS =
-  "\n\nREAD-ONLY TOOLS (always available):\n" +
-  "When you need information about the user's open workspace, emit one of these tags in your reply. " +
-  "Orbit will execute it and return the result as a [TOOL_RESULT] on the next turn. " +
-  "The user does NOT need to do anything — these are YOUR tools.\n\n" +
+  "\n\nREAD-ONLY & INTERACTIVE DESKTOP TOOLS (always available):\n" +
+  "When you need information about the user's open workspace, or want to interact with the user's desktop, emit one of these tags in your reply. " +
+  "Orbit will execute it (with the user's manual approval in Ask mode) and return the result as a [TOOL_RESULT] on the next turn.\n\n" +
   "- To list every file in the open workspace:\n" +
   "  <list_workspace />\n" +
   "- To grep the workspace for a symbol, string, or regex:\n" +
@@ -145,7 +144,14 @@ const READ_ONLY_TOOLS =
   "- To read a specific file:\n" +
   "  <read_file path=\"relative/path/to/file.js\" />\n" +
   "- To list every application window currently open on the user's desktop:\n" +
-  "  <list_windows />\n\n" +
+  "  <list_windows />\n" +
+  "- To type text into a specific window on the user's desktop, or the active window (highly recommended when the user asks you to type, write, or enter text into external apps like Discord, browser fields, etc.):\n" +
+  "  <type_text window=\"PARTIAL_WINDOW_TITLE\">text to type</type_text>\n" +
+  "  (Always emit <list_windows /> first to discover the real open windows before specifying the window name, or omit the window attribute to type in the active window)\n" +
+  "- To click on a specific absolute screen pixel coordinate (e.g. click a button, focus an input box):\n" +
+  "  <click_pixel x=\"X_COORDINATE\" y=\"Y_COORDINATE\" />\n" +
+  "- To open a URL in the user's default external web browser:\n" +
+  "  <open_browser url=\"URL_TO_OPEN\" />\n\n" +
   "Rules:\n" +
   "- Emit the tag verbatim, on its own line. Do NOT wrap it in backticks or markdown code blocks.\n" +
   "- After emitting a tag, STOP. Wait for the [TOOL_RESULT] in the next turn before continuing.\n" +
@@ -262,6 +268,21 @@ function getSystemPrompt(model, agentMode, workspaceContext, mode, whisperLangua
   return `${base}${buildWorkspaceBlock(workspaceContext)}`;
 }
 
+// Token-bloat guards. We cap both the number of historical turns kept and
+// the per-message length so a runaway tool-result or a 500-turn conversation
+// can't push the prompt past the model's context window.
+const HISTORY_MAX_TURNS = 30;
+const MESSAGE_MAX_CHARS = 24000;
+
+function clipMessageContent(content) {
+  const s = String(content || "");
+  if (s.length <= MESSAGE_MAX_CHARS) return s;
+  const keep = MESSAGE_MAX_CHARS - 200;
+  const head = s.slice(0, Math.floor(keep * 0.7));
+  const tail = s.slice(-Math.floor(keep * 0.3));
+  return `${head}\n\n[…${s.length - keep} chars elided to stay under the context budget…]\n\n${tail}`;
+}
+
 function toHistoryPairs(messages) {
   const pairs = (messages ?? [])
     .filter((m) => {
@@ -272,7 +293,7 @@ function toHistoryPairs(messages) {
       if (m.role === "assistant" && !m.content.trim()) return false;
       return true;
     })
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({ role: m.role, content: clipMessageContent(m.content) }));
 
   // Vertex requires strictly alternating user/model turns.
   // Merge consecutive same-role messages by joining their content.
@@ -284,6 +305,15 @@ function toHistoryPairs(messages) {
     } else {
       merged.push({ ...msg });
     }
+  }
+  // Keep only the most recent HISTORY_MAX_TURNS entries. Always preserve the
+  // final user turn at the tail by snapping the slice to a user start so the
+  // alternation invariant survives. Older context is dropped silently — the
+  // system prompt + recent turns are usually all the model needs.
+  if (merged.length > HISTORY_MAX_TURNS) {
+    let start = merged.length - HISTORY_MAX_TURNS;
+    while (start < merged.length && merged[start].role !== "user") start++;
+    return merged.slice(start);
   }
   return merged;
 }

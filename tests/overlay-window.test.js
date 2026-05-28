@@ -39,7 +39,7 @@ describe("getOverlayBounds", () => {
     });
   });
 
-  it("sets width to collapsed width and height to 230px when dropdown-open", () => {
+  it("sets width to collapsed width and height to 480px when dropdown-open", () => {
     expect(
       getOverlayBounds({
         displayWidth: 1440,
@@ -49,7 +49,7 @@ describe("getOverlayBounds", () => {
       x: 320,
       y: 12,
       width: COLLAPSED_WIDTH,
-      height: 230
+      height: 480
     });
   });
 

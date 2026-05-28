@@ -2270,3 +2270,82 @@ select {
   opacity: 0.7;
   font-variant-numeric: tabular-nums;
 }
+
+/* Coordinate calibration modal */
+.modal-calibration {
+  background: rgba(20, 20, 22, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  width: 460px;
+  max-width: 92vw;
+  color: var(--text);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.modal-calibration .modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-calibration h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.modal-calibration .modal-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 20px;
+  cursor: pointer;
+  opacity: 0.7;
+  line-height: 1;
+}
+.modal-calibration .modal-close:hover { opacity: 1; }
+.modal-calibration .modal-body { padding: 12px 16px 16px; }
+.calibration-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  font-size: 12px;
+  padding: 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.calibration-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.calibration-row label {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.calibration-row input[type="number"] {
+  width: 80px;
+  padding: 4px 6px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.modal-btn {
+  padding: 5px 12px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.modal-btn:hover { background: rgba(255,255,255,0.14); }
+.calibration-status { margin: 0; }

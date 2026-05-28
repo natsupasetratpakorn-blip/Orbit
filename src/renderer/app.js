@@ -3120,7 +3120,9 @@ const SLASH_COMMANDS = [
   { name: "/region", desc: "Capture a screen region (drag rectangle) to attach to the next message" },
   { name: "/timeline", desc: "List recent agent file writes in this workspace" },
   { name: "/revert", desc: "Revert the most recent agent file write (use /revert N for the Nth-back)" },
-  { name: "/wake", desc: "Toggle 'Hey Orbit' wake-word listening (opt-in, uses your mic continuously)" }
+  { name: "/wake", desc: "Toggle 'Hey Orbit' wake-word listening (opt-in, uses your mic continuously)" },
+  { name: "/summon-agents", desc: "Spawn N parallel background agents on one task. Usage: /summon-agents 3 <task>" },
+  { name: "/calibrate", desc: "Open a coordinate-calibration tool to verify click/type targeting and DPI scaling" }
 ];
 
 // ─── Wake word listening ────────────────────────────────────────────────
@@ -3697,11 +3699,118 @@ async function executeSlashCommand(cmd) {
       toast(`Region capture failed: ${err.message}`, { variant: "error" });
     }
     return true;
+  } else if (c.startsWith("/summon-agents")) {
+    const rest = cmd.slice("/summon-agents".length).trim();
+    const m = rest.match(/^(\d+)\s+(.+)$/s);
+    if (!m) {
+      toast("Usage: /summon-agents <N> <task>  (e.g. /summon-agents 3 build tic-tac-toe)", { variant: "error", duration: 6000 });
+      return true;
+    }
+    const count = Math.max(1, Math.min(8, parseInt(m[1], 10)));
+    const task = m[2].trim();
+    if (!workspacePath) {
+      toast("Open a workspace first (folder icon) — agents need somewhere to write.", { variant: "error" });
+      return true;
+    }
+    toast(`Summoning ${count} parallel agent${count === 1 ? "" : "s"} on: ${task.slice(0, 60)}${task.length > 60 ? "…" : ""}`, { variant: "success", duration: 5000 });
+    const launches = Array.from({ length: count }, () =>
+      window.orbit.deployAgent({ workspacePath, task, model: selectedModel })
+        .catch((err) => ({ ok: false, error: err?.message || String(err) }))
+    );
+    Promise.all(launches).then((results) => {
+      const ok = results.filter((r) => r && r.ok).length;
+      const failed = results.length - ok;
+      toast(`Summoned ${ok}/${results.length} agent${results.length === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}. Check .orbit/ logs.`, {
+        variant: failed > 0 ? "error" : "success",
+        duration: 6000
+      });
+    });
+    return true;
+  } else if (c === "/calibrate" || c.startsWith("/calibrate ")) {
+    openCalibrationModal();
+    return true;
   } else {
     // Other slash commands (/goal, /schedule, /grill-me) should proceed as LLM messages
     return false;
   }
   return true;
+}
+
+// Coordinate calibration helper. Opens a small modal showing screen size and
+// devicePixelRatio, with controls to probe a (x, y) click and verify the
+// AI's pixel-coordinate model matches the user's actual desktop. Useful when
+// click_pixel or type_text seem to land in the wrong spot (multi-monitor,
+// DPI scaling, taskbar offsets).
+function openCalibrationModal() {
+  const existing = document.getElementById("orbitCalibrationModal");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "orbitCalibrationModal";
+  backdrop.className = "modal-backdrop";
+
+  const modal = document.createElement("div");
+  modal.className = "modal modal-calibration";
+  const dpr = window.devicePixelRatio || 1;
+  const scrW = window.screen.width;
+  const scrH = window.screen.height;
+  const realW = Math.round(scrW * dpr);
+  const realH = Math.round(scrH * dpr);
+
+  modal.innerHTML = `
+    <div class="modal-header">
+      <h3>Coordinate Calibration</h3>
+      <button type="button" class="modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 8px;font-size:12px;opacity:.75;">Use this to verify the AI's click/type targeting matches your real desktop. Multi-monitor setups and DPI scaling are common sources of drift.</p>
+      <div class="calibration-grid">
+        <div><strong>CSS resolution:</strong> ${scrW} × ${scrH}</div>
+        <div><strong>Device pixel ratio:</strong> ${dpr}</div>
+        <div><strong>Physical resolution:</strong> ${realW} × ${realH}</div>
+      </div>
+      <div class="calibration-row">
+        <label>X <input id="calX" type="number" value="${Math.round(scrW / 2)}" min="0" max="${realW}"></label>
+        <label>Y <input id="calY" type="number" value="${Math.round(scrH / 2)}" min="0" max="${realH}"></label>
+        <button type="button" id="calProbeClick" class="modal-btn">Probe click (3s)</button>
+        <button type="button" id="calProbeType" class="modal-btn">Probe type (3s)</button>
+      </div>
+      <p id="calStatus" class="calibration-status" style="font-size:11px;opacity:.7;min-height:14px;">Tip: Click "Probe" then quickly focus the target window to see where the click/type actually lands.</p>
+    </div>
+  `;
+
+  backdrop.append(modal);
+  document.body.append(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  modal.querySelector(".modal-close").addEventListener("click", close);
+
+  const status = modal.querySelector("#calStatus");
+  const setStatus = (msg) => { status.textContent = msg; };
+
+  const probe = async (kind) => {
+    const x = parseInt(modal.querySelector("#calX").value, 10);
+    const y = parseInt(modal.querySelector("#calY").value, 10);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { setStatus("Enter valid X / Y."); return; }
+    for (let i = 3; i > 0; i--) {
+      setStatus(`Probing ${kind} at (${x}, ${y}) in ${i}…`);
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    try {
+      if (kind === "click") {
+        const res = await window.orbit.clickPixel({ x, y });
+        setStatus(res?.ok ? `✓ Clicked at (${x}, ${y}).` : `Click failed: ${res?.error || "unknown"}`);
+      } else {
+        const res = await window.orbit.typeIntoWindow({ text: `[Orbit calibration ${x},${y}]` });
+        setStatus(res?.ok ? `✓ Typed marker into the focused window.` : `Type failed: ${res?.error || "unknown"}`);
+      }
+    } catch (err) {
+      setStatus(`Probe error: ${err?.message || err}`);
+    }
+  };
+  modal.querySelector("#calProbeClick").addEventListener("click", () => probe("click"));
+  modal.querySelector("#calProbeType").addEventListener("click", () => probe("type"));
 }
 
 // Track input changes for autocomplete
