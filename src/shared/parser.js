@@ -12,7 +12,7 @@ export function parseAIResponse(content) {
   // 7. <click_pixel x="..." y="..." />
   // 8. <open_browser url="..." />
   // 9. <deploy_agent task="..." />
-  const regex = /<(execute_command|run_command|shell|bash|write_file|create_file|edit_file|update_file|patch_file|read_file|open_file|type_text|open_browser|deploy_agent|search_workspace|grep_workspace|find_in_files|keystroke)(?:\s+(?:path|window|url|task|mode|shell)="([^"]+)")?\s*>([\s\S]*?)<\/\1>|<(?:read_file|open_file)\s+path="([^"]+)"\s*\/>|<(list_workspace|scan_workspace|list_files|list_windows|list_apps|list_applications)\s*\/>|<click_pixel\s+x="(\d+)"\s+y="(\d+)"\s*\/>|<open_browser\s+url="([^"]+)"\s*\/>|<deploy_agent\s+task="([^"]+)"\s*\/>|<scroll\s+x="(\d+)"\s+y="(\d+)"\s+ticks="(-?\d+)"\s*\/>|<focus_window\s+title="([^"]+)"\s*\/>|<wait(?:_ms)?\s+ms="(\d+)"\s*\/>|<(right_click|double_click)\s+x="(\d+)"\s+y="(\d+)"\s*\/>/gs;
+  const regex = /<(execute_command|run_command|shell|bash|write_file|create_file|edit_file|update_file|patch_file|read_file|open_file|type_text|open_browser|deploy_agent|search_workspace|grep_workspace|find_in_files|keystroke|ask_user_questions)(?:\s+(?:path|window|url|task|mode|shell)="([^"]+)")?\s*>([\s\S]*?)<\/\1>|<(?:read_file|open_file)\s+path="([^"]+)"\s*\/>|<(list_workspace|scan_workspace|list_files|list_windows|list_apps|list_applications)\s*\/>|<click_pixel\s+x="(\d+)"\s+y="(\d+)"\s*\/>|<open_browser\s+url="([^"]+)"\s*\/>|<deploy_agent\s+task="([^"]+)"\s*\/>|<scroll\s+x="(\d+)"\s+y="(\d+)"\s+ticks="(-?\d+)"\s*\/>|<focus_window\s+title="([^"]+)"\s*\/>|<wait(?:_ms)?\s+ms="(\d+)"\s*\/>|<(right_click|double_click)\s+x="(\d+)"\s+y="(\d+)"\s*\/>/gs;
 
   // Canonicalize aliases so downstream rendering/execution only deals with the
   // four canonical types.
@@ -23,6 +23,7 @@ export function parseAIResponse(content) {
     if (tag === "scan_workspace" || tag === "list_files") return "list_workspace";
     if (tag === "list_apps" || tag === "list_applications") return "list_windows";
     if (tag === "grep_workspace" || tag === "find_in_files") return "search_workspace";
+    if (tag === "ask_user_questions") return "ask_user_questions";
     return tag;
   };
 
@@ -110,6 +111,8 @@ export function parseAIResponse(content) {
         // The body of <search_workspace>...</search_workspace> is the query.
         // Optional `mode="regex"` attribute switches from literal to regex.
         parts.push({ type, query: (code || "").trim(), mode: attr || "literal" });
+      } else if (type === "ask_user_questions") {
+        parts.push({ type, content: code });
       } else {
         parts.push({ type, path: attr, content: code });
       }
@@ -372,4 +375,28 @@ export function applySearchReplacePatches(originalContent, patchContent) {
     result = result.slice(0, index) + block.replace + result.slice(index + block.search.length);
   }
   return result;
+}
+
+export function parseQuestions(content) {
+  const lines = content.split("\n");
+  const questions = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Strip leading '- ' or '* '
+    const match = trimmed.match(/^[-*]\s+(.*)$/);
+    if (!match) continue;
+    const qText = match[1].trim();
+    
+    // Check for choices in brackets like [A, B, C]
+    const optMatch = qText.match(/(.*)\[(.*?)\]\s*$/);
+    if (optMatch) {
+      const text = optMatch[1].trim();
+      const options = optMatch[2].split(",").map(o => o.trim());
+      questions.push({ text, options, type: "select" });
+    } else {
+      questions.push({ text: qText, type: "text" });
+    }
+  }
+  return questions;
 }

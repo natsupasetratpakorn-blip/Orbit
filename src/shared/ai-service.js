@@ -196,11 +196,19 @@ const STUDY_BEHAVIORS =
   "   A: The process by which plants convert light energy into chemical energy.\n" +
   "   ```\n" +
   "   Orbit renders this block as an interactive review widget with built-in CSV export. Do NOT also output the cards as a plain markdown list — the fenced block is the entire deliverable. Aim for 5–20 cards unless the user specifies a count. Keep questions atomic (one fact per card) and answers brief.\n\n" +
-  "3) ASK-FIRST (build/code requests only). If the user's message is a request to BUILD, IMPLEMENT, CREATE, ADD, or MAKE a feature, tool, component, file, or script — AND important parameters are genuinely ambiguous (trigger UX, storage location, scope boundary, library choice, target file, data shape) — respond with up to 3 short clarifying questions as a markdown bulleted list and then STOP. Do not begin coding, do not emit tool tags, do not write files. Wait for the user's answers. RULES:\n" +
+  "3) ASK-FIRST (build/code requests only). If the user's message is a request to BUILD, IMPLEMENT, CREATE, ADD, or MAKE a feature, tool, component, file, or script — AND important parameters are genuinely ambiguous (trigger UX, storage location, scope boundary, library choice, target file, data shape) — respond with up to 3 short clarifying questions wrapped in a <ask_user_questions> tag and then STOP. Do not begin coding, do not emit other tool tags, do not write files. Wait for the user's answers. RULES:\n" +
   "   • Never ask more than 3 questions in one turn.\n" +
+  "   • Format each question on its own line starting with '- ' or '* ' inside the tag.\n" +
+  "   • If you want to offer concrete multiple-choice options for a question, place them in brackets at the end of the question, separated by commas, e.g., '[React, Next.js, Vanilla]' or '[Yes, No]'. This allows Orbit to render beautiful, interactive inputs in the UI.\n" +
   "   • Skip the ask-first step for: bug fixes you can root-cause from existing code, small local edits, renames, formatting/style fixes, or any non-build request (chat, explain, debug, summarize, search).\n" +
   "   • Skip it if you can answer confidently from the workspace context, conversation history, or an attached screenshot — guessing is fine when only one reasonable interpretation exists.\n" +
-  "   • Each question should be ≤15 words and offer 2–3 concrete options (\"slash command vs. dedicated button vs. auto-detect\") rather than open-ended (\"how should it work?\").\n";
+  "   • Each question should be ≤15 words and offer 2–3 concrete options where possible.\n" +
+  "   • Example:\n" +
+  "     <ask_user_questions>\n" +
+  "     - Which style would you like? [Glassmorphic, Minimalist, Dark mode]\n" +
+  "     - Should we add automated tests for this? [Yes, No]\n" +
+  "     - What is the name of your database file?\n" +
+  "     </ask_user_questions>\n";
 
 function buildWorkspaceBlock(workspaceContext) {
   if (!workspaceContext || !workspaceContext.path) {
@@ -467,16 +475,19 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
     parts: latestParts
   });
 
+  const isCodingModel = ["Voyager 2.1 Preview", "Voyager 2 Pro", "Voyager 2"].includes(resolvedModel);
+  const isPlanningModel = resolvedModel === "Orchestra 1.1" || mode === "planning";
+
   const requestBody = {
     contents,
     systemInstruction: {
       parts: [{ text: getSystemPrompt(resolvedModel, agentMode, workspaceContext, mode, whisperLanguage) }]
     },
-    // Letting Gemini use its default behavior. Explicitly configuring
-    // thinkingConfig was producing empty streams — the model spent its whole
-    // budget on hidden thoughts that we filter out of the visible stream.
-    // Default mode emits visible text reliably across 2.5 Flash and 2.5 Pro.
-    generationConfig: {}
+    // Dynamically tuned generationConfig for maximum code precision and plan stability
+    generationConfig: {
+      temperature: isCodingModel ? 0.15 : isPlanningModel ? 0.3 : 0.7,
+      maxOutputTokens: isCodingModel || isPlanningModel ? 8192 : 4096
+    }
   };
 
   // 60-second hang guard. If the caller passed an abortSignal (user clicked

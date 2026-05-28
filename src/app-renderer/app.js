@@ -6,7 +6,7 @@ import {
   getActiveProject,
   selectProject
 } from "../shared/orbit-state.js";
-import { parseAIResponse, renderMarkdown } from "../shared/parser.js";
+import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
@@ -313,6 +313,163 @@ const AUTO_RUN_IN_AGENT_MODE = new Set([
   "open_browser", "deploy_agent"
 ]);
 
+
+function renderAskUserQuestionsCard(part, messageId) {
+  const card = document.createElement("div");
+  card.className = "action-card action-ask-user-questions";
+  
+  const head = document.createElement("div");
+  head.className = "action-card-head";
+  head.innerHTML = `
+    <span class="action-icon">❓</span>
+    <span class="action-label" style="font-weight: 600; color: var(--accent-light);">Clarifying Questions</span>
+    <span class="action-status status-idle"></span>
+  `;
+  card.append(head);
+
+  const qList = parseQuestions(part.content || "");
+  if (qList.length === 0) {
+    const body = document.createElement("pre");
+    body.className = "action-body";
+    body.textContent = part.content;
+    card.append(body);
+    return card;
+  }
+
+  const formContainer = document.createElement("div");
+  formContainer.className = "action-body ask-questions-form-container";
+  
+  const form = document.createElement("form");
+  form.className = "ask-questions-form";
+  
+  const inputs = [];
+  qList.forEach((q, idx) => {
+    const qGroup = document.createElement("div");
+    qGroup.className = "ask-question-group";
+    qGroup.style.marginBottom = "14px";
+    
+    const label = document.createElement("label");
+    label.className = "ask-question-label";
+    label.style.display = "block";
+    label.style.marginBottom = "6px";
+    label.style.fontWeight = "500";
+    label.style.color = "var(--fg-medium)";
+    label.textContent = `${idx + 1}. ${q.text}`;
+    qGroup.append(label);
+    
+    let inputEl;
+    if (q.type === "select") {
+      inputEl = document.createElement("select");
+      inputEl.className = "ask-question-select";
+      inputEl.style.width = "100%";
+      inputEl.style.padding = "8px 12px";
+      inputEl.style.borderRadius = "6px";
+      inputEl.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+      inputEl.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+      inputEl.style.color = "var(--fg-light)";
+      inputEl.style.outline = "none";
+      
+      q.options.forEach(opt => {
+        const option = document.createElement("option");
+        option.value = opt;
+        option.textContent = opt;
+        option.style.backgroundColor = "#1e1e1e";
+        option.style.color = "#ffffff";
+        inputEl.append(option);
+      });
+    } else {
+      inputEl = document.createElement("input");
+      inputEl.type = "text";
+      inputEl.className = "ask-question-input";
+      inputEl.placeholder = "Type your answer...";
+      inputEl.style.width = "100%";
+      inputEl.style.padding = "8px 12px";
+      inputEl.style.borderRadius = "6px";
+      inputEl.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+      inputEl.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+      inputEl.style.color = "var(--fg-light)";
+      inputEl.style.outline = "none";
+      
+      // Prevent keystrokes from bubbling to window level
+      inputEl.addEventListener("keydown", (ev) => {
+        ev.stopPropagation();
+      });
+    }
+    
+    qGroup.append(inputEl);
+    form.append(qGroup);
+    inputs.push({ questionText: q.text, element: inputEl });
+  });
+  
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "submit";
+  submitBtn.className = "ask-questions-submit-btn";
+  submitBtn.textContent = "Submit Answers";
+  submitBtn.style.padding = "8px 16px";
+  submitBtn.style.borderRadius = "6px";
+  submitBtn.style.backgroundColor = "var(--accent)";
+  submitBtn.style.border = "none";
+  submitBtn.style.color = "#ffffff";
+  submitBtn.style.fontWeight = "600";
+  submitBtn.style.cursor = "pointer";
+  submitBtn.style.transition = "background-color 0.2s, transform 0.1s";
+  
+  submitBtn.addEventListener("mouseover", () => {
+    submitBtn.style.backgroundColor = "var(--accent-light)";
+  });
+  submitBtn.addEventListener("mouseout", () => {
+    submitBtn.style.backgroundColor = "var(--accent)";
+  });
+  
+  // Disable if already answered by a subsequent message in chat.
+  let isAnswered = false;
+  const chat = getActiveChat(state);
+  if (chat) {
+    const msgIdx = chat.messages.findIndex(m => m.id === messageId);
+    if (msgIdx !== -1) {
+      for (let i = msgIdx + 1; i < chat.messages.length; i++) {
+        if (chat.messages[i].role === "user" && chat.messages[i].content.startsWith("**User's Answers:**")) {
+          isAnswered = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (isAnswered) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Answers Submitted";
+    submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
+    submitBtn.style.color = "var(--fg-dark)";
+    submitBtn.style.cursor = "default";
+    inputs.forEach(inp => inp.element.disabled = true);
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (isAnswered) return;
+    isAnswered = true;
+    
+    let answersText = "**User's Answers:**\n";
+    inputs.forEach((inp, idx) => {
+      answersText += `${idx + 1}. ${inp.questionText}: ${inp.element.value}\n`;
+    });
+    
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Answers Submitted";
+    submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
+    submitBtn.style.color = "var(--fg-dark)";
+    submitBtn.style.cursor = "default";
+    inputs.forEach(inp => inp.element.disabled = true);
+
+    sendMessage(answersText).catch(() => {});
+  });
+  
+  formContainer.append(form);
+  card.append(formContainer);
+  return card;
+}
+
 function renderAssistantBody(message, container) {
   const parts = parseAIResponse(message.content || "");
   if (!parts.length) {
@@ -329,6 +486,8 @@ function renderAssistantBody(message, container) {
       p.className = "assistant-text";
       p.innerHTML = renderMarkdown(part.content);
       container.append(p);
+    } else if (part.type === "ask_user_questions") {
+      container.append(renderAskUserQuestionsCard(part, message.id));
     } else {
       const cardKey = `${message.id}-${part.type}-${partIdx}`;
       container.append(renderActionCard(part, cardKey));

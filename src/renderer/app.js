@@ -1,4 +1,4 @@
-import { parseAIResponse, renderMarkdown, computeLineDiff } from "../shared/parser.js";
+import { parseAIResponse, renderMarkdown, computeLineDiff, parseQuestions } from "../shared/parser.js";
 import { transcribeWithWhisper, warmupWhisper } from "./whisper.js";
 
 const MODELS = [
@@ -2136,7 +2136,7 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
     const msg = chatMessages.find(m => m.id === messageId);
     if (msg) {
       const msgParts = parseAIResponse(msg.content);
-      const toolParts = msgParts.filter(p => p.type !== "text");
+      const toolParts = msgParts.filter(p => p.type !== "text" && p.type !== "ask_user_questions");
       const allDone = toolParts.every((p, idx) => {
         const key = `${messageId}-${p.type}-${p.path || "command"}-${idx}`;
         const state = cardExecutionStates[key];
@@ -2477,6 +2477,173 @@ function appendTextWithFlashcards(container, text, sourceId) {
   }
 }
 
+function renderAskUserQuestionsCard(part, messageId) {
+  const card = document.createElement("div");
+  card.className = "action-card action-ask-user-questions";
+  
+  const head = document.createElement("div");
+  head.className = "action-card-header";
+  head.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span class="action-icon" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 8px #38bdf8;"></span>
+      <span class="action-card-type write" style="font-weight: 600; color: #38bdf8;">Clarifying Questions</span>
+    </div>
+  `;
+  card.append(head);
+
+  const qList = parseQuestions(part.content || "");
+  if (qList.length === 0) {
+    const body = document.createElement("pre");
+    body.className = "action-card-body";
+    body.style.whiteSpace = "pre-wrap";
+    body.textContent = part.content;
+    card.append(body);
+    return card;
+  }
+
+  const formContainer = document.createElement("div");
+  formContainer.className = "action-card-body ask-questions-form-container";
+  formContainer.style.padding = "14px";
+  
+  const form = document.createElement("form");
+  form.className = "ask-questions-form";
+  
+  const inputs = [];
+  qList.forEach((q, idx) => {
+    const qGroup = document.createElement("div");
+    qGroup.className = "ask-question-group";
+    qGroup.style.marginBottom = "14px";
+    
+    const label = document.createElement("label");
+    label.className = "ask-question-label";
+    label.style.display = "block";
+    label.style.marginBottom = "6px";
+    label.style.fontWeight = "500";
+    label.style.fontSize = "12px";
+    label.style.color = "rgba(255, 255, 255, 0.8)";
+    label.textContent = `${idx + 1}. ${q.text}`;
+    qGroup.append(label);
+    
+    let inputEl;
+    if (q.type === "select") {
+      inputEl = document.createElement("select");
+      inputEl.className = "ask-question-select";
+      inputEl.style.width = "100%";
+      inputEl.style.padding = "8px 12px";
+      inputEl.style.borderRadius = "6px";
+      inputEl.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+      inputEl.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+      inputEl.style.color = "#ffffff";
+      inputEl.style.fontSize = "12px";
+      inputEl.style.outline = "none";
+      
+      q.options.forEach(opt => {
+        const option = document.createElement("option");
+        option.value = opt;
+        option.textContent = opt;
+        option.style.backgroundColor = "#1e1e1e";
+        option.style.color = "#ffffff";
+        inputEl.append(option);
+      });
+    } else {
+      inputEl = document.createElement("input");
+      inputEl.type = "text";
+      inputEl.className = "ask-question-input";
+      inputEl.placeholder = "Type your answer...";
+      inputEl.style.width = "100%";
+      inputEl.style.padding = "8px 12px";
+      inputEl.style.borderRadius = "6px";
+      inputEl.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+      inputEl.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+      inputEl.style.color = "#ffffff";
+      inputEl.style.fontSize = "12px";
+      inputEl.style.outline = "none";
+      
+      // Prevent keystrokes from bubbling to window level
+      inputEl.addEventListener("keydown", (ev) => {
+        ev.stopPropagation();
+      });
+    }
+    
+    qGroup.append(inputEl);
+    form.append(qGroup);
+    inputs.push({ questionText: q.text, element: inputEl });
+  });
+  
+  const submitBtn = document.createElement("button");
+  submitBtn.type = "submit";
+  submitBtn.className = "ask-questions-submit-btn";
+  submitBtn.textContent = "Submit Answers";
+  submitBtn.style.padding = "8px 16px";
+  submitBtn.style.borderRadius = "6px";
+  submitBtn.style.backgroundColor = "rgba(56, 189, 248, 0.2)";
+  submitBtn.style.border = "1px solid rgba(56, 189, 248, 0.4)";
+  submitBtn.style.color = "#38bdf8";
+  submitBtn.style.fontWeight = "600";
+  submitBtn.style.fontSize = "12px";
+  submitBtn.style.cursor = "pointer";
+  submitBtn.style.transition = "background-color 0.2s, transform 0.1s";
+  
+  submitBtn.addEventListener("mouseover", () => {
+    if (!submitBtn.disabled) {
+      submitBtn.style.backgroundColor = "rgba(56, 189, 248, 0.35)";
+    }
+  });
+  submitBtn.addEventListener("mouseout", () => {
+    if (!submitBtn.disabled) {
+      submitBtn.style.backgroundColor = "rgba(56, 189, 248, 0.2)";
+    }
+  });
+  
+  // Disable if already answered by a subsequent message in chat.
+  let isAnswered = false;
+  const msgIdx = chatMessages.findIndex(m => m.id === messageId);
+  if (msgIdx !== -1) {
+    for (let i = msgIdx + 1; i < chatMessages.length; i++) {
+      if (chatMessages[i].role === "user" && chatMessages[i].content.startsWith("**User's Answers:**")) {
+        isAnswered = true;
+        break;
+      }
+    }
+  }
+
+  if (isAnswered) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Answers Submitted";
+    submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+    submitBtn.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+    submitBtn.style.color = "rgba(255, 255, 255, 0.4)";
+    submitBtn.style.cursor = "default";
+    inputs.forEach(inp => inp.element.disabled = true);
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (isAnswered) return;
+    isAnswered = true;
+    
+    let answersText = "**User's Answers:**\n";
+    inputs.forEach((inp, idx) => {
+      answersText += `${idx + 1}. ${inp.questionText}: ${inp.element.value}\n`;
+    });
+    
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Answers Submitted";
+    submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+    submitBtn.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+    submitBtn.style.color = "rgba(255, 255, 255, 0.4)";
+    submitBtn.style.cursor = "default";
+    inputs.forEach(inp => inp.element.disabled = true);
+
+    sendMessage(answersText).catch(() => {});
+  });
+  
+  form.append(submitBtn);
+  formContainer.append(form);
+  card.append(formContainer);
+  return card;
+}
+
 function renderAssistantMessage(message, container) {
   const parts = parseAIResponse(message.content);
 
@@ -2484,12 +2651,15 @@ function renderAssistantMessage(message, container) {
   for (const part of parts) {
     if (part.type === "text") {
       appendTextWithFlashcards(container, part.content, message.id);
+    } else if (part.type === "ask_user_questions") {
+      container.append(renderAskUserQuestionsCard(part, message.id));
     } else {
       const card = renderActionCard(part, message.id, partIndex);
       container.append(card);
       partIndex++;
     }
   }
+
 
   // Auto Mode: kick off any still-pending action cards immediately, without
   // waiting for a click. Runs at most one action per render to avoid races —
