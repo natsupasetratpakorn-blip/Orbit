@@ -1235,6 +1235,7 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "write_file" ? "write" :
     part.type === "type_text" ? "type" :
     part.type === "list_workspace" ? "list" :
+    part.type === "list_windows" ? "list" :
     part.type === "click_pixel" ? "click" :
     part.type === "open_browser" ? "browser" :
     part.type === "deploy_agent" ? "agent" : "read";
@@ -1243,6 +1244,7 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "write_file" ? "Write File" :
     part.type === "type_text" ? `Type into "${part.window || "?"}"` :
     part.type === "list_workspace" ? "List Workspace" :
+    part.type === "list_windows" ? "List Windows" :
     part.type === "click_pixel" ? "Click Pixel" :
     part.type === "open_browser" ? "Open Browser" :
     part.type === "deploy_agent" ? "Deploy Agent" : "Read File";
@@ -1256,6 +1258,7 @@ function renderActionCard(part, messageId, partIndex) {
   pathSpan.textContent = 
     part.type === "click_pixel" ? `x=${part.x}, y=${part.y}` :
     part.type === "open_browser" ? part.url :
+    part.type === "list_windows" ? "Active Application Windows" :
     part.type === "deploy_agent" ? "Autonomous Background Agent" : (part.path || "");
 
   header.append(typeSpan, pathSpan);
@@ -1632,7 +1635,19 @@ function renderActionCard(part, messageId, partIndex) {
     desc.className = "action-card-description";
     desc.textContent = `Opening URL:\n"${part.url}"`;
     body.append(desc);
-  } else if (part.content && part.type !== "read_file" && part.type !== "click_pixel") {
+  } else if (part.type === "list_windows" && cardState.windows) {
+    const list = document.createElement("div");
+    list.className = "terminal-box";
+    list.style.marginTop = "8px";
+    const headerEl = document.createElement("div");
+    headerEl.className = "terminal-header";
+    headerEl.textContent = `Visible Application Windows (${cardState.windows.length})`;
+    const pre = document.createElement("pre");
+    pre.className = "terminal-output";
+    pre.textContent = cardState.windows.map(w => `[Process: ${w.processName}] Title: "${w.title}" (PID: ${w.pid})`).join("\n");
+    list.append(headerEl, pre);
+    body.append(list);
+  } else if (part.content && part.type !== "read_file" && part.type !== "click_pixel" && part.type !== "list_windows") {
     const code = document.createElement("pre");
     code.className = "action-card-code";
     code.textContent = part.content.trim();
@@ -1663,6 +1678,7 @@ function renderActionCard(part, messageId, partIndex) {
         part.type === "write_file" ? "Apply" :
         part.type === "type_text" ? "Type" :
         part.type === "list_workspace" ? "Scan" :
+        part.type === "list_windows" ? "List" :
         part.type === "click_pixel" ? "Click" :
         part.type === "open_browser" ? "Open" :
         part.type === "deploy_agent" ? "Deploy" : "Load";
@@ -1694,6 +1710,7 @@ function renderActionCard(part, messageId, partIndex) {
     statusSpan.className = "action-card-status working";
     statusSpan.textContent =
       part.type === "execute_command" ? "Running..." :
+      part.type === "list_windows" ? "Listing..." :
       part.type === "click_pixel" ? "Clicking..." : "Applying...";
 
     const loader = document.createElement("button");
@@ -1991,6 +2008,25 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
     } else {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to open browser" };
       toolResult = `[TOOL_RESULT] open_browser FAILED: ${res?.error || "Failed to open browser"}`;
+    }
+  } else if (part.type === "list_windows") {
+    try {
+      const res = await window.orbit.listWindows();
+      if (res && res.ok) {
+        cardExecutionStates[cardKey] = {
+          ...cardExecutionStates[cardKey],
+          status: "success",
+          windows: res.windows
+        };
+        const text = res.windows.map(w => `[PID ${w.pid}] ${w.processName} — "${w.title}"`).join("\n");
+        toolResult = `[TOOL_RESULT] list_windows:\n--- WINDOW LIST START ---\n${text}\n--- WINDOW LIST END ---`;
+      } else {
+        cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to list windows" };
+        toolResult = `[TOOL_RESULT] list_windows FAILED: ${res?.error || "Unknown error"}`;
+      }
+    } catch (e) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: e?.message || String(e) };
+      toolResult = `[TOOL_RESULT] list_windows FAILED: ${e?.message || e}`;
     }
   } else if (part.type === "deploy_agent") {
     let count = 1;
