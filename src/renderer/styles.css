@@ -1673,7 +1673,9 @@ select {
   background: #000000;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 380px;
   z-index: 100;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
   display: flex;
