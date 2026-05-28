@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Orbit — Region Picker</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        cursor: crosshair;
+        user-select: none;
+        font-family: system-ui, sans-serif;
+      }
+      #shade {
+        position: absolute; inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(1px);
+      }
+      #selection {
+        position: absolute;
+        border: 1.5px solid #ffffff;
+        box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
+        background: transparent;
+        pointer-events: none;
+        display: none;
+      }
+      #hint {
+        position: absolute; top: 16px; left: 50%;
+        transform: translateX(-50%);
+        background: rgba(20,20,20,0.92);
+        color: #fff;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 12px;
+        letter-spacing: 0.03em;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shade"></div>
+    <div id="selection"></div>
+    <div id="hint">Drag to select a region · Esc to cancel</div>
+    <script>
+      const shade = document.getElementById("shade");
+      const sel = document.getElementById("selection");
+      let startX = 0, startY = 0, dragging = false;
+
+      function setRect(x1, y1, x2, y2) {
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        const w = Math.abs(x2 - x1);
+        const h = Math.abs(y2 - y1);
+        sel.style.left = x + "px";
+        sel.style.top = y + "px";
+        sel.style.width = w + "px";
+        sel.style.height = h + "px";
+        sel.style.display = "block";
+        // Cut the shade where the selection is so the user sees what they'll grab.
+        shade.style.clipPath = `polygon(
+          0 0, 100% 0, 100% 100%, 0 100%, 0 0,
+          ${x}px ${y}px,
+          ${x + w}px ${y}px,
+          ${x + w}px ${y + h}px,
+          ${x}px ${y + h}px,
+          ${x}px ${y}px
+        )`;
+      }
+
+      window.addEventListener("mousedown", (e) => {
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        setRect(startX, startY, startX, startY);
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        setRect(startX, startY, e.clientX, e.clientY);
+      });
+
+      window.addEventListener("mouseup", (e) => {
+        if (!dragging) return;
+        dragging = false;
+        const rect = {
+          x: Math.round(Math.min(startX, e.clientX)),
+          y: Math.round(Math.min(startY, e.clientY)),
+          width: Math.round(Math.abs(e.clientX - startX)),
+          height: Math.round(Math.abs(e.clientY - startY))
+        };
+        if (rect.width < 4 || rect.height < 4) {
+          window.orbitPicker.cancel();
+          return;
+        }
+        window.orbitPicker.commit(rect);
+      });
+
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") window.orbitPicker.cancel();
+      });
+    </script>
+  </body>
+</html>

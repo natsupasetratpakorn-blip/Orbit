@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npm test *)",
+      "Bash(node --check src/main/main.js)",
+      "Bash(node --check src/main/agent-runner.js)",
+      "Bash(node --check src/preload.cjs)",
+      "Bash(node --check src/preload-picker.cjs)",
+      "Bash(node --check src/renderer/app.js)",
+      "Bash(node --check src/shared/ai-service.js)",
+      "PowerShell(Get-ChildItem 'C:\\\\Users\\\\USER\\\\Documents\\\\Orbit\\\\src' -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round\\($_.Length/1MB,2\\)}})",
+      "PowerShell(Join-Path *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Test-Path *)"
+    ]
+  }
+}

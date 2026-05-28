@@ -1,0 +1,67 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  addMessageToActiveChat,
+  createDefaultOrbitState,
+  createNewChat,
+  selectProject
+} from "../src/shared/orbit-state.js";
+
+describe("orbit mission control state", () => {
+  it("starts with a default project and active Voyager AI chat", () => {
+    const state = createDefaultOrbitState();
+
+    expect(state.projects).toHaveLength(1);
+    expect(state.projects[0].name).toBe("Solar System Survey");
+    expect(state.activeProjectId).toBe(state.projects[0].id);
+    expect(state.activeChatId).toBe(state.projects[0].chats[0].id);
+    expect(state.projects[0].chats[0].title).toBe("Voyager AI");
+  });
+
+  it("creates a new chat in the active project and selects it", () => {
+    const state = createNewChat(createDefaultOrbitState(), "Europa habitability");
+    const project = state.projects[0];
+
+    expect(project.chats).toHaveLength(2);
+    expect(state.activeChatId).toBe(project.chats[1].id);
+    expect(project.chats[1].title).toBe("Europa habitability");
+  });
+
+  it("adds messages only to the active chat", () => {
+    const state = createNewChat(createDefaultOrbitState(), "Saturn rings");
+    const next = addMessageToActiveChat(state, {
+      id: "msg-1",
+      role: "user",
+      content: "Explain the Cassini Division",
+      timestamp: "2026-05-28T00:00:00.000Z"
+    });
+
+    const activeChat = next.projects[0].chats.find((chat) => chat.id === next.activeChatId);
+    const inactiveChat = next.projects[0].chats.find((chat) => chat.id !== next.activeChatId);
+
+    expect(activeChat.messages).toHaveLength(1);
+    expect(inactiveChat.messages).toHaveLength(0);
+  });
+
+  it("selects a project and its most recent chat", () => {
+    const state = {
+      ...createDefaultOrbitState(),
+      projects: [
+        ...createDefaultOrbitState().projects,
+        {
+          id: "project-outer-planets",
+          name: "Outer Planets",
+          updatedAt: "2026-05-28T00:00:00.000Z",
+          chats: [
+            { id: "chat-neptune", title: "Neptune flyby", messages: [], createdAt: "2026-05-28T00:00:00.000Z" }
+          ]
+        }
+      ]
+    };
+
+    const next = selectProject(state, "project-outer-planets");
+
+    expect(next.activeProjectId).toBe("project-outer-planets");
+    expect(next.activeChatId).toBe("chat-neptune");
+  });
+});

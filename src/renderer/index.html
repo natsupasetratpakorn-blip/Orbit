@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orbit Overlay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css" />
+    <!-- Map bare module specifiers to CDN URLs. Electron's renderer uses
+         native browser ESM which doesn't resolve "@huggingface/transformers"
+         on its own. Pinned to a specific version so behavior is reproducible. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@huggingface/transformers": "https://esm.sh/@huggingface/transformers@3.7.5"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="overlay" class="overlay" data-state="collapsed">
+      <!-- Autocomplete list for slash commands -->
+      <div id="slashMenu" class="slash-menu" style="display: none;"></div>
+
+      <form id="bar" class="bar" autocomplete="off">
+        <div class="grab-line" aria-hidden="true"></div>
+        <div class="custom-select-container" id="overlayModelSelectContainer">
+          <button type="button" class="model-select-btn" id="overlayModelSelectBtn" aria-label="AI model">
+            <span>Voyager 1 Flash</span> ▾
+          </button>
+          <div class="custom-select-options" id="overlayModelOptions">
+            <div class="custom-select-option" data-value="Auto">⚡ Auto</div>
+            <div class="custom-select-option selected" data-value="Voyager 1 Flash">⬦ Voyager 1 Flash</div>
+            <div class="custom-select-option" data-value="Voyager 1">✧ Voyager 1</div>
+            <div class="custom-select-option" data-value="Voyager 2 Preview">✦ Voyager 2 Preview</div>
+            <div class="custom-select-option" data-value="Voyager 2 Pro">⬡ Voyager 2 Pro</div>
+            <div class="custom-select-option" data-value="Orchestra 1.1">🎻 Orchestra 1.1</div>
+          </div>
+        </div>
+        <div class="custom-select-container" id="overlayModeSelectContainer">
+          <button type="button" class="mode-select-btn" id="overlayModeSelectBtn" aria-label="Active mode" title="Switch active intelligence mode">
+            <span>Ask</span> ▾
+          </button>
+          <div class="custom-select-options" id="overlayModeOptions">
+            <div class="custom-select-option selected" data-value="ask">💬 Ask</div>
+            <div class="custom-select-option" data-value="agents">🤖 Agents</div>
+            <div class="custom-select-option" data-value="planning">📋 Planning</div>
+          </div>
+        </div>
+        <input id="promptInput" class="prompt-input" type="text" placeholder="Ask with screen context..." aria-label="Message" />
+        <canvas id="audioVisualizer" class="audio-visualizer" style="display: none;"></canvas>
+        <button id="micButton" class="icon-button mic-button" type="button" aria-label="Voice Input" title="Voice Input (Dictate prompt)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="11" rx="3" ry="3" />
+            <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+            <line x1="12" y1="18" x2="12" y2="22" />
+          </svg>
+        </button>
+        <button id="workspaceButton" class="icon-button workspace-toggle-button" type="button" aria-label="Toggle Workspace Files" title="Toggle Workspace Files">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+        </button>
+        <button id="sendButton" class="send-button" type="submit" aria-label="Send" title="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="13 6 19 12 13 18" />
+          </svg>
+        </button>
+        <span id="usageMeter" class="usage-meter" title="Session token usage / estimated cost" style="display:none;"></span>
+        <span id="statusDot" class="status-dot" aria-label="Ready"></span>
+      </form>
+
+      <section id="panel" class="panel" aria-label="Chat history">
+        <div class="panel-header">
+          <div>
+            <p class="panel-title">Orbit Context</p>
+            <p id="panelSubtitle" class="panel-subtitle">Local shell mode</p>
+          </div>
+          <div class="panel-header-actions">
+            <button id="fullAppButton" class="icon-button mini-button full-app-button" type="button" aria-label="Open full app" title="Open full app">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M8 9h8M8 13h5" />
+              </svg>
+            </button>
+            <button id="autoModeButton" class="icon-button mini-button auto-button" type="button" aria-label="Toggle Auto Mode" title="Toggle Auto Mode (run actions without asking)">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+            </button>
+            <button id="screenshotToggleButton" class="icon-button mini-button screenshot-toggle" type="button" aria-label="Toggle screen context" title="Attach screen context to messages">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3l2-3h4l2 3h3a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+            </button>
+            <button id="speakToggleButton" class="icon-button mini-button" type="button" aria-label="Toggle Auto-Speak" title="Toggle Auto-Speak (Read aloud)">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+            </button>
+            <button id="widthToggleButton" class="icon-button mini-button" type="button" aria-label="Toggle wide layout" title="Toggle wide layout">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16M4 6h16M4 18h16" />
+              </svg>
+            </button>
+            <button id="exportChatButton" class="icon-button mini-button" type="button" aria-label="Export chat as Markdown" title="Export chat as Markdown">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+            <button id="clearHistoryButton" class="icon-button mini-button" type="button" aria-label="Clear chat history" title="Clear history">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 5v6m4-6v6" />
+              </svg>
+            </button>
+            <button id="closeButton" class="icon-button" type="button" aria-label="Collapse chat" title="Collapse">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 15 6-6 6 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <div class="panel-body">
+          <aside id="workspaceDrawer" class="workspace-drawer" style="display: none;">
+            <div class="drawer-header">
+              <span class="drawer-title">Workspace files</span>
+              <button id="changeDirButton" class="icon-button mini-button" type="button" title="Change directory">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2 17h2v.5a2.5 2.5 0 0 0 5 0V17h11a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H9L7 1H2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" />
+                </svg>
+              </button>
+            </div>
+            <div id="workspacePath" class="workspace-path">No project folder selected</div>
+            <div class="search-box">
+              <input id="fileSearchInput" type="text" placeholder="Filter files..." aria-label="Filter files" />
+            </div>
+            <ul id="fileList" class="file-list"></ul>
+          </aside>
+          
+          <div class="panel-chat-container">
+            <div id="contextTray" class="context-tray" style="display: none;">
+              <span class="context-tray-title">Attached Context:</span>
+              <div id="attachedFiles" class="attached-files"></div>
+            </div>
+            <div id="messages" class="messages" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast container for inline errors / status notices. Lives outside the
+         overlay so it isn't clipped by the panel's overflow rules. -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
