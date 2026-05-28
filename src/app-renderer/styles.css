@@ -389,7 +389,7 @@ select {
 .chat-header {
   position: absolute;
   left: 50%;
-  bottom: 520px;
+  top: 24px;
   transform: translateX(-50%);
 }
 
@@ -512,7 +512,7 @@ select {
 .composer {
   position: absolute;
   left: 50%;
-  bottom: 390px;
+  bottom: 24px;
   width: min(640px, calc(100vw - 390px));
   min-height: 116px;
   transform: translateX(-50%);
