@@ -7,6 +7,7 @@ const MODELS = [
   "Voyager 1 Flash",
   "Voyager 2 Preview",
   "Voyager 2 Pro",
+  "Voyager 2.1",
   "Orchestra 1.1"
 ];
 const DEFAULT_MODEL = "Voyager 1 Flash";
@@ -44,7 +45,7 @@ const attachedFilesEl = document.querySelector("#attachedFiles");
 // Premium Voice Selectors
 const speakToggleButton = document.querySelector("#speakToggleButton");
 const micButton = document.querySelector("#micButton");
-const whisperLangBtn = document.querySelector("#whisperLangBtn");
+const whisperLangBtn = document.querySelector("#whisperLangBtn"); // optional element
 
 // State Variables
 let selectedModel = DEFAULT_MODEL;
@@ -73,6 +74,7 @@ const MODEL_TO_VERTEX_ID = {
   "Voyager 1 Flash": "gemini-2.5-flash-lite",
   "Voyager 2 Preview": "gemini-3.1-flash-lite",
   "Voyager 2 Pro": "gemini-3.5-flash",
+  "Voyager 2.1": "gemini-2.5-flash",
   "Orchestra 1.1": "gemini-2.5-flash-lite"
 };
 let sessionInputTokens = 0;
@@ -954,6 +956,11 @@ function updateSpeakToggleUI() {
   }
 }
 
+// Whisper language button UI update — optional UI element, no-op if not present
+function updateWhisperLangUI() {
+  if (!whisperLangBtn) return; // element is optional
+}
+
 async function loadHistory() {
   try {
     const history = await window.orbit.loadHistory();
@@ -1237,6 +1244,10 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "list_workspace" ? "list" :
     part.type === "list_windows" ? "list" :
     part.type === "click_pixel" ? "click" :
+    part.type === "scroll" ? "click" :
+    part.type === "keystroke" ? "type" :
+    part.type === "focus_window" ? "list" :
+    part.type === "wait_ms" ? "read" :
     part.type === "open_browser" ? "browser" :
     part.type === "deploy_agent" ? "agent" : "read";
   const typeLabel =
@@ -1245,7 +1256,11 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "type_text" ? `Type into "${part.window || "?"}"` :
     part.type === "list_workspace" ? "List Workspace" :
     part.type === "list_windows" ? "List Windows" :
-    part.type === "click_pixel" ? "Click Pixel" :
+    part.type === "click_pixel" ? (part.button === "right" ? "Right Click" : part.count === 2 ? "Double Click" : "Click Pixel") :
+    part.type === "scroll" ? "Scroll" :
+    part.type === "keystroke" ? `Keystroke${part.window ? ` → "${part.window}"` : ""}` :
+    part.type === "focus_window" ? "Focus Window" :
+    part.type === "wait_ms" ? "Wait" :
     part.type === "open_browser" ? "Open Browser" :
     part.type === "deploy_agent" ? "Deploy Agent" : "Read File";
 
@@ -1255,8 +1270,12 @@ function renderActionCard(part, messageId, partIndex) {
 
   const pathSpan = document.createElement("span");
   pathSpan.className = "action-card-path";
-  pathSpan.textContent = 
+  pathSpan.textContent =
     part.type === "click_pixel" ? `x=${part.x}, y=${part.y}` :
+    part.type === "scroll" ? `x=${part.x}, y=${part.y}, ticks=${part.ticks}` :
+    part.type === "keystroke" ? part.content || "" :
+    part.type === "focus_window" ? `"${part.window || ""}"` :
+    part.type === "wait_ms" ? `${part.ms}ms` :
     part.type === "open_browser" ? part.url :
     part.type === "list_windows" ? "Active Application Windows" :
     part.type === "deploy_agent" ? "Autonomous Background Agent" : (part.path || "");
@@ -1872,7 +1891,8 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
   if (part.type === "execute_command") {
     const res = await window.orbit.runWorkspaceCommand({
       workspacePath,
-      command: part.content.trim()
+      command: part.content.trim(),
+      shell: part.shell || undefined
     });
 
     if (res && res.ok) {
@@ -1987,16 +2007,50 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
   } else if (part.type === "click_pixel") {
     const res = await window.orbit.clickPixel({
       x: part.x,
-      y: part.y
+      y: part.y,
+      button: part.button || "left",
+      count: part.count || 1
     });
-
+    const desc = `${part.button === "right" ? "right_click" : part.count === 2 ? "double_click" : "click_pixel"} at x=${part.x}, y=${part.y}`;
     if (res && res.ok) {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
-      toolResult = `[TOOL_RESULT] click_pixel at x=${part.x}, y=${part.y} — clicked successfully.`;
+      toolResult = `[TOOL_RESULT] ${desc} — clicked successfully.`;
     } else {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Click failed" };
-      toolResult = `[TOOL_RESULT] click_pixel at x=${part.x}, y=${part.y} FAILED: ${res?.error || "Click failed"}`;
+      toolResult = `[TOOL_RESULT] ${desc} FAILED: ${res?.error || "Click failed"}`;
     }
+  } else if (part.type === "scroll") {
+    const res = await window.orbit.scrollAt({ x: part.x, y: part.y, ticks: part.ticks });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] scroll at (${part.x}, ${part.y}) ticks=${part.ticks} — done.`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "scroll failed" };
+      toolResult = `[TOOL_RESULT] scroll FAILED: ${res?.error || "scroll failed"}`;
+    }
+  } else if (part.type === "keystroke") {
+    const res = await window.orbit.keystroke({ windowTitle: part.window || null, keys: part.content || "" });
+    const where = part.window ? `into "${part.window}"` : "into active window";
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] keystroke ${where} — sent "${part.content}".`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "keystroke failed" };
+      toolResult = `[TOOL_RESULT] keystroke ${where} FAILED: ${res?.error || "keystroke failed"}`;
+    }
+  } else if (part.type === "focus_window") {
+    const res = await window.orbit.focusWindow({ windowTitle: part.window });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] focus_window "${part.window}" — brought to front.`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "focus failed" };
+      toolResult = `[TOOL_RESULT] focus_window FAILED: ${res?.error || "focus failed"}`;
+    }
+  } else if (part.type === "wait_ms") {
+    const res = await window.orbit.waitMs({ ms: part.ms });
+    cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+    toolResult = `[TOOL_RESULT] wait_ms — paused ${res?.waitedMs ?? part.ms}ms.`;
   } else if (part.type === "open_browser") {
     const res = await window.orbit.openBrowser({
       url: part.url
@@ -2440,7 +2494,7 @@ function renderAssistantMessage(message, container) {
   // Auto Mode: kick off any still-pending action cards immediately, without
   // waiting for a click. Runs at most one action per render to avoid races —
   // the next card will fire after the tool result comes back and re-renders.
-  if (autoMode && agentMode) {
+  if (autoMode) {
     let loopPartIndex = 0;
     for (const part of parts) {
       if (part.type === "text") continue;
