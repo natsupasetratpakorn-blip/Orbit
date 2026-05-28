@@ -82,13 +82,16 @@ function loadState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (parsed?.projects?.length) {
-      // Ensure each project has a `files` array.
-      parsed.projects = parsed.projects.map((p) => ({ ...p, files: Array.isArray(p.files) ? p.files : [] }));
+      parsed.projects = parsed.projects.map((p) => ({
+        ...p,
+        files: Array.isArray(p.files) ? p.files : [],
+        workspacePath: typeof p.workspacePath === "string" ? p.workspacePath : ""
+      }));
       return parsed;
     }
   } catch { /* fall through */ }
   const def = createDefaultOrbitState();
-  def.projects = def.projects.map((p) => ({ ...p, files: [] }));
+  def.projects = def.projects.map((p) => ({ ...p, files: [], workspacePath: "" }));
   return def;
 }
 
@@ -139,6 +142,8 @@ function basename(p) {
 function renderProjects() {
   const activeProject = getActiveProject(state);
   activeProjectName.textContent = activeProject?.name ?? "Orbit";
+  // Update or attach the workspace folder badge next to the active project chip.
+  renderActiveProjectFolderBadge(activeProject);
   projectsList.innerHTML = "";
 
   state.projects.forEach((project) => {
@@ -155,8 +160,12 @@ function renderProjects() {
       <span class="activity-dot"></span>
     `;
     item.querySelector(".project-name").textContent = project.name;
-    const subline = project.chats.at(-1)?.title ?? "No conversations yet";
-    item.querySelector(".project-subline").textContent = subline;
+    const subline = project.workspacePath
+      ? `▤ ${basename(project.workspacePath)}`
+      : (project.chats.at(-1)?.title ?? "No conversations yet");
+    const sublineEl = item.querySelector(".project-subline");
+    sublineEl.textContent = subline;
+    if (project.workspacePath) sublineEl.title = project.workspacePath;
     item.addEventListener("click", () => {
       state = selectProject(state, project.id);
       render();
@@ -449,12 +458,14 @@ async function sendMessage(rawText) {
 
   let finalText = "";
   try {
+    const activeProject = getActiveProject(state);
     const response = await window.orbit?.sendToAI?.({
       streamId,
       model: selectedModel,
       messages: cleanMessages,
       screenshotPath,
       attachments: attachmentsSnapshot.map((a) => a.path),
+      workspacePath: activeProject?.workspacePath || "",
       agentMode: currentMode === "agents",
       mode: currentMode
     });
@@ -538,12 +549,24 @@ function appendStreamingDelta(delta) {
 }
 
 // ─── Projects / chats CRUD ───────────────────────────────────────────────
-function createProject() {
+async function createProject() {
   const count = state.projects.length + 1;
+  const defaultName = `New Project ${count}`;
+  const name = window.prompt("Project name", defaultName);
+  if (name == null) return; // cancelled
+  let workspacePath = "";
+  try {
+    workspacePath = (await window.orbit?.selectWorkspaceDir?.()) || "";
+  } catch { /* user cancelled or no picker */ }
+  if (!workspacePath) {
+    const proceed = window.confirm("No folder selected. Create the project anyway? (You can attach a folder later from the project chip.)");
+    if (!proceed) return;
+  }
   const now = new Date().toISOString();
   const project = {
     id: crypto.randomUUID(),
-    name: `New Project ${count}`,
+    name: name.trim() || defaultName,
+    workspacePath,
     updatedAt: now,
     files: [],
     chats: [
@@ -558,7 +581,24 @@ function createProject() {
   };
   render();
   persistState();
-  toast(`Created project "${project.name}"`, "success");
+  toast(`Created "${project.name}"${workspacePath ? ` · ${basename(workspacePath)}` : ""}`, "success", 4000);
+}
+
+async function changeProjectFolder(projectId) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  let workspacePath = "";
+  try {
+    workspacePath = (await window.orbit?.selectWorkspaceDir?.()) || "";
+  } catch { /* ignore */ }
+  if (!workspacePath) return;
+  state = {
+    ...state,
+    projects: state.projects.map((p) => (p.id === projectId ? { ...p, workspacePath } : p))
+  };
+  render();
+  persistState();
+  toast(`Folder set: ${basename(workspacePath)}`, "success");
 }
 
 function renameProject(projectId) {
@@ -714,9 +754,9 @@ async function tryRunSlashCommand(input) {
       }
       const n = Math.max(1, Math.min(8, parseInt(m[1], 10)));
       const task = m[2].trim();
-      const workspacePath = state.workspacePath || null;
+      const workspacePath = getActiveProject(state)?.workspacePath || state.workspacePath || null;
       if (!workspacePath) {
-        toast("Set a workspace path first (Settings).", "error");
+        toast("This project has no folder. Click ▤ Choose folder above the chat to set one.", "error", 6000);
         return true;
       }
       toast(`Summoning ${n} agents…`, "success");
@@ -1079,6 +1119,34 @@ function openCalibrationModal() {
 }
 
 // ─── Misc helpers ───────────────────────────────────────────────────────
+function renderActiveProjectFolderBadge(project) {
+  const header = document.getElementById("chatHeader");
+  if (!header) return;
+  let badge = document.getElementById("activeWorkspaceBadge");
+  if (!project) { if (badge) badge.remove(); return; }
+  if (!badge) {
+    badge = document.createElement("button");
+    badge.id = "activeWorkspaceBadge";
+    badge.type = "button";
+    badge.className = "workspace-badge";
+    badge.title = "Click to choose this project's folder";
+    badge.addEventListener("click", () => changeProjectFolder(state.activeProjectId));
+    // Insert right after the project chip
+    const chip = document.getElementById("activeProjectButton");
+    if (chip?.parentElement === header) header.insertBefore(badge, chip.nextSibling);
+    else header.append(badge);
+  }
+  if (project.workspacePath) {
+    badge.textContent = `▤ ${basename(project.workspacePath)}`;
+    badge.classList.remove("is-empty");
+    badge.title = `Workspace: ${project.workspacePath} (click to change)`;
+  } else {
+    badge.textContent = "▤ Choose folder";
+    badge.classList.add("is-empty");
+    badge.title = "No folder bound to this project — click to choose";
+  }
+}
+
 function colorForId(id) {
   // Hash an id to a hue for the colored dot next to each project.
   let h = 0;

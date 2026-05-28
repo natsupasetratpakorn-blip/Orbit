@@ -13,7 +13,8 @@
       "PowerShell(Join-Path *)",
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-Process *)",
-      "PowerShell(Test-Path *)"
+      "PowerShell(Test-Path *)",
+      "Bash(node --check src/app-renderer/app.js)"
     ]
   }
 }

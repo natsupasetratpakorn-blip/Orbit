@@ -1040,6 +1040,15 @@ function registerIpc() {
       return { ok: false, error: "Missing text" };
     }
 
+    const isTargetingActive = !windowTitle || !windowTitle.trim();
+
+    if (isTargetingActive) {
+      if (overlayWindow && overlayWindow.isVisible()) {
+        overlayWindow.hide();
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    }
+
     // Single-quote escape for PowerShell string literals: '' is the only way
     // to embed a literal single quote inside a '...' string.
     const psString = (s) => `'${s.replace(/'/g, "''")}'`;
@@ -1081,11 +1090,11 @@ function registerIpc() {
         `$title = ${psString(windowTitle)}`,
         "$activated = $wshell.AppActivate($title)",
         "if (-not $activated) {",
-        "  $proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+        "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
         "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
         "}",
         "if (-not $activated) {",
-        "  $proc = Get-Process | Where-Object { $_.ProcessName -and $_.ProcessName.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+        "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -and $_.ProcessName.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
         "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
         "}",
         "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
@@ -1113,6 +1122,13 @@ function registerIpc() {
 
     const script = lines.join("\n");
     const result = await runPowerShell(script);
+
+    if (isTargetingActive) {
+      if (overlayWindow && !overlayWindow.isVisible()) {
+        overlayWindow.showInactive();
+      }
+    }
+
     if (!result.ok) {
       const errText = result.stderr || result.error || "";
       const msg = /window-not-found/.test(errText)
@@ -1131,7 +1147,7 @@ function registerIpc() {
   // <type_text> instead of guessing a hard-coded title like "Notepad".
   ipcMain.handle("desktop:list-windows", async () => {
     const script = [
-      "$procs = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 }",
+      "$procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 }",
       "$out = $procs | Select-Object -Property @{Name='title';Expression={$_.MainWindowTitle}}, @{Name='processName';Expression={$_.ProcessName}}, @{Name='pid';Expression={$_.Id}}",
       "$out | ConvertTo-Json -Compress -Depth 3"
     ].join("\n");

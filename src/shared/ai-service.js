@@ -92,6 +92,7 @@ const AGENT_INSTRUCTIONS =
   "The `window` attribute is optional. If specified, it searches for a window matching that title (e.g. \"Chrome\" or \"Notepad\"). " +
   "If the `window` attribute is omitted, it types directly into the currently active/focused window on the user's desktop.\n" +
   "IMPORTANT: Do NOT guess or hard-code window titles. If the user references an app by name (\"type this into Discord\", \"send it in Slack\", \"put it in my code editor\"), FIRST emit <list_windows /> to discover the real open windows on the user's machine, then pick the matching title (or a unique substring of it) for your follow-up <type_text>. Only omit `window` when the user explicitly says \"in the current/active window\".\n" +
+  "SCREENSHOT TYPING RULE: If the user attaches a screenshot containing text (like a typing test, a webpage document, or an image of text) and asks you to type it, extract the text directly from the screenshot and type it using <type_text>. Do NOT try to use <read_file> to read workspace files unless the user explicitly mentions the text is inside a specific project file.\n" +
   "Special keys use SendKeys notation inside the text: {ENTER} for Enter, {TAB} for Tab, {BACKSPACE} for Backspace, " +
   "+ for Shift modifier (e.g. \"+a\" types capital A), ^ for Ctrl (e.g. \"^a\" selects all), % for Alt.\n" +
   "Literal characters that conflict with SendKeys (+, ^, %, ~, (, ), {, }) must be wrapped in braces: {+}, {^}, {%}, {~}, {(}, {)}, {{}, {}}.\n" +
@@ -147,7 +148,7 @@ const READ_ONLY_TOOLS =
   "  <list_windows />\n" +
   "- To type text into a specific window on the user's desktop, or the active window (highly recommended when the user asks you to type, write, or enter text into external apps like Discord, browser fields, etc.):\n" +
   "  <type_text window=\"PARTIAL_WINDOW_TITLE\">text to type</type_text>\n" +
-  "  (Always emit <list_windows /> first to discover the real open windows before specifying the window name, or omit the window attribute to type in the active window)\n" +
+  "  (Always emit <list_windows /> first to discover the real open windows before specifying the window name, or omit the window attribute to type in the active window. SCREENSHOT TYPING RULE: If the user attaches a screenshot containing text and asks you to type it, extract the text directly from the screenshot and use <type_text>; do NOT use <read_file>)\n" +
   "- To click on a specific absolute screen pixel coordinate (e.g. click a button, focus an input box):\n" +
   "  <click_pixel x=\"X_COORDINATE\" y=\"Y_COORDINATE\" />\n" +
   "- To open a URL in the user's default external web browser:\n" +
