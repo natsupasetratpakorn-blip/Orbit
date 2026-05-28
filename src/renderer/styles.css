@@ -1668,7 +1668,8 @@ select {
   position: absolute;
   top: 125%;
   left: 0;
-  width: 100%;
+  min-width: 100%;
+  width: max-content;
   background: #000000;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
@@ -1699,6 +1700,7 @@ select {
   cursor: pointer;
   transition: all 100ms ease;
   text-align: left;
+  white-space: nowrap;
 }
 
 #overlayModelOptions .custom-select-option:hover,
@@ -2120,3 +2122,151 @@ select {
   transform: none;
 }
 
+
+/* Nested category groups inside the model dropdown */
+#overlayModelOptions .custom-select-category-header {
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 100ms ease;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  white-space: nowrap;
+  gap: 12px;
+}
+#overlayModelOptions .custom-select-category-header:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+#overlayModelOptions .custom-select-category .cat-arrow {
+  font-size: 13px;
+  opacity: 0.55;
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-block;
+}
+#overlayModelOptions .custom-select-category.is-open .cat-arrow {
+  transform: rotate(90deg);
+  opacity: 0.85;
+}
+#overlayModelOptions .custom-select-submenu {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+#overlayModelOptions .custom-select-submenu > * {
+  overflow: hidden;
+  min-height: 0;
+}
+#overlayModelOptions .custom-select-category.is-open .custom-select-submenu {
+  grid-template-rows: 1fr;
+}
+#overlayModelOptions .custom-select-submenu .custom-select-option {
+  padding-left: 26px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 100ms ease;
+  text-align: left;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+#overlayModelOptions .custom-select-submenu .custom-select-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+#overlayModelOptions .custom-select-category:has(.custom-select-option.selected) .custom-select-category-header {
+  color: var(--text);
+}
+
+/* Flashcard review widget (study mode) */
+.flashcard-widget {
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: inherit;
+}
+.flashcard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.flashcard-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+  letter-spacing: 0.03em;
+}
+.flashcard-export {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.flashcard-export:hover { background: rgba(255, 255, 255, 0.14); }
+.flashcard-card {
+  min-height: 96px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: background 0.15s;
+  outline: none;
+}
+.flashcard-card:hover { background: rgba(255, 255, 255, 0.09); }
+.flashcard-card:focus { box-shadow: 0 0 0 2px rgba(120, 180, 255, 0.4); }
+.flashcard-card.is-flipped { background: rgba(120, 180, 255, 0.08); }
+.flashcard-face-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+}
+.flashcard-face-text {
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  flex: 1;
+}
+.flashcard-hint {
+  font-size: 10px;
+  opacity: 0.45;
+  margin-top: auto;
+}
+.flashcard-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  gap: 8px;
+}
+.flashcard-nav {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: inherit;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.flashcard-nav:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.flashcard-nav:disabled { opacity: 0.35; cursor: not-allowed; }
+.flashcard-progress {
+  font-size: 11px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}

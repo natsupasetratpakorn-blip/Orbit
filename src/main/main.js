@@ -1228,10 +1228,6 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle("workspace:get-active-agents-count", () => {
-    return activeBackgroundAgents.size;
-  });
-
   ipcMain.handle("workspace:run-command", async (_event, { workspacePath, command }) => {
     const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
     if (!root) {

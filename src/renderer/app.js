@@ -2248,16 +2248,152 @@ async function abortCurrentStream() {
   }
 }
 
+function parseFlashcardsBlock(body) {
+  const text = String(body || "").trim();
+  if (!text) return null;
+  const entries = text.split(/^\s*---\s*$/m);
+  const cards = [];
+  for (const entry of entries) {
+    const qMatch = entry.match(/^\s*Q:\s*([\s\S]*?)(?=^\s*A:|\Z)/m);
+    const aMatch = entry.match(/^\s*A:\s*([\s\S]*)$/m);
+    if (qMatch && aMatch) {
+      cards.push({ q: qMatch[1].trim(), a: aMatch[1].trim() });
+    }
+  }
+  return cards.length > 0 ? cards : null;
+}
+
+function buildFlashcardWidget(cards, sourceId) {
+  const widget = document.createElement("div");
+  widget.className = "flashcard-widget";
+
+  const header = document.createElement("div");
+  header.className = "flashcard-header";
+  const title = document.createElement("span");
+  title.className = "flashcard-title";
+  title.textContent = `Flashcards · ${cards.length} card${cards.length === 1 ? "" : "s"}`;
+  const exportBtn = document.createElement("button");
+  exportBtn.type = "button";
+  exportBtn.className = "flashcard-export";
+  exportBtn.textContent = "Export CSV";
+  header.append(title, exportBtn);
+
+  const card = document.createElement("div");
+  card.className = "flashcard-card";
+  card.setAttribute("role", "button");
+  card.setAttribute("tabindex", "0");
+
+  const faceLabel = document.createElement("div");
+  faceLabel.className = "flashcard-face-label";
+  const faceText = document.createElement("div");
+  faceText.className = "flashcard-face-text";
+  const hint = document.createElement("div");
+  hint.className = "flashcard-hint";
+  hint.textContent = "Click or press Space to flip";
+  card.append(faceLabel, faceText, hint);
+
+  const controls = document.createElement("div");
+  controls.className = "flashcard-controls";
+  const prevBtn = document.createElement("button");
+  prevBtn.type = "button";
+  prevBtn.className = "flashcard-nav";
+  prevBtn.textContent = "‹ Prev";
+  const progress = document.createElement("span");
+  progress.className = "flashcard-progress";
+  const nextBtn = document.createElement("button");
+  nextBtn.type = "button";
+  nextBtn.className = "flashcard-nav";
+  nextBtn.textContent = "Next ›";
+  controls.append(prevBtn, progress, nextBtn);
+
+  widget.append(header, card, controls);
+
+  let idx = 0;
+  let showingAnswer = false;
+  const update = () => {
+    const c = cards[idx];
+    faceLabel.textContent = showingAnswer ? "Answer" : "Question";
+    faceText.textContent = showingAnswer ? c.a : c.q;
+    progress.textContent = `${idx + 1} / ${cards.length}`;
+    prevBtn.disabled = idx === 0;
+    nextBtn.disabled = idx === cards.length - 1;
+    card.classList.toggle("is-flipped", showingAnswer);
+  };
+  const flip = () => { showingAnswer = !showingAnswer; update(); };
+  const go = (delta) => {
+    const next = idx + delta;
+    if (next < 0 || next >= cards.length) return;
+    idx = next;
+    showingAnswer = false;
+    update();
+  };
+  card.addEventListener("click", flip);
+  card.addEventListener("keydown", (e) => {
+    if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+  });
+  prevBtn.addEventListener("click", () => go(-1));
+  nextBtn.addEventListener("click", () => go(1));
+
+  exportBtn.addEventListener("click", () => {
+    const escape = (s) => `"${String(s).replace(/"/g, '""')}"`;
+    const csv = ["Question,Answer"].concat(cards.map((c) => `${escape(c.q)},${escape(c.a)}`)).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `orbit-flashcards-${sourceId || Date.now()}.csv`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  update();
+  return widget;
+}
+
+function appendTextWithFlashcards(container, text, sourceId) {
+  const re = /```flashcards\s*\n([\s\S]*?)\n```/g;
+  let lastIdx = 0;
+  let match;
+  let widgetIdx = 0;
+  while ((match = re.exec(text)) !== null) {
+    const before = text.slice(lastIdx, match.index);
+    if (before.trim()) {
+      const p = document.createElement("p");
+      p.className = "message-content";
+      p.innerHTML = renderMarkdown(before);
+      container.append(p);
+    }
+    const cards = parseFlashcardsBlock(match[1]);
+    if (cards) {
+      container.append(buildFlashcardWidget(cards, `${sourceId || "msg"}-${widgetIdx++}`));
+    } else {
+      const p = document.createElement("p");
+      p.className = "message-content";
+      p.innerHTML = renderMarkdown("```\n" + match[1] + "\n```");
+      container.append(p);
+    }
+    lastIdx = re.lastIndex;
+  }
+  const tail = text.slice(lastIdx);
+  if (tail.trim() || lastIdx === 0) {
+    const p = document.createElement("p");
+    p.className = "message-content";
+    p.innerHTML = renderMarkdown(tail);
+    container.append(p);
+  }
+}
+
 function renderAssistantMessage(message, container) {
   const parts = parseAIResponse(message.content);
 
   let partIndex = 0;
   for (const part of parts) {
     if (part.type === "text") {
-      const p = document.createElement("p");
-      p.className = "message-content";
-      p.innerHTML = renderMarkdown(part.content);
-      container.append(p);
+      appendTextWithFlashcards(container, part.content, message.id);
     } else {
       const card = renderActionCard(part, message.id, partIndex);
       container.append(card);
@@ -2653,6 +2789,14 @@ function closeModeDropdown() {
   }
 }
 
+function expandSelectedModelCategory() {
+  if (!modelSelectOptions) return;
+  modelSelectOptions.querySelectorAll(".custom-select-category").forEach((cat) => {
+    const hasSelected = !!cat.querySelector(".custom-select-option.selected");
+    cat.classList.toggle("is-open", hasSelected);
+  });
+}
+
 if (modelSelectBtn && modelSelectOptions) {
   modelSelectBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2660,6 +2804,7 @@ if (modelSelectBtn && modelSelectOptions) {
     const willOpen = !modelSelectOptions.classList.contains("open");
     if (willOpen) {
       modelSelectOptions.classList.add("open");
+      expandSelectedModelCategory();
       if (overlay.dataset.state !== "expanded") {
         setOverlayState("dropdown-open");
       }
@@ -2669,6 +2814,18 @@ if (modelSelectBtn && modelSelectOptions) {
   });
 
   modelSelectOptions.addEventListener("click", async (e) => {
+    const header = e.target.closest(".custom-select-category-header");
+    if (header) {
+      e.stopPropagation();
+      const cat = header.parentElement;
+      const wasOpen = cat.classList.contains("is-open");
+      modelSelectOptions.querySelectorAll(".custom-select-category").forEach((c) => {
+        if (c !== cat) c.classList.remove("is-open");
+      });
+      cat.classList.toggle("is-open", !wasOpen);
+      return;
+    }
+
     const option = e.target.closest(".custom-select-option");
     if (!option) return;
 
