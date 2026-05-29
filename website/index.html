@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orbit — your screen-aware AI copilot, powered by Voyager</title>
+    <meta name="description" content="Orbit is a desktop AI copilot that sees your screen, edits your code, automates your desktop, and dictates offline. Powered by the Voyager model series. A black-and-white, space-themed coding companion." />
+    <meta property="og:title" content="Orbit — screen-aware AI, powered by Voyager" />
+    <meta property="og:description" content="A desktop AI copilot that sees your screen, ships code, and automates your machine. Powered by Voyager." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='white'/%3E%3Cellipse cx='16' cy='16' rx='14' ry='6' fill='none' stroke='white' stroke-opacity='0.5' transform='rotate(-20 16 16)'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <canvas id="space" class="space-canvas" aria-hidden="true"></canvas>
+    <div id="cursorGlow" class="cursor-glow" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+
+    <!-- ─── Nav ─────────────────────────────────────────────────────── -->
+    <header class="nav" id="nav">
+      <a class="brand" href="#top" aria-label="Orbit home">
+        <span class="brand-mark" aria-hidden="true"><span class="brand-core"></span></span>
+        <span class="brand-name">ORBIT</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#models">Models</a>
+        <a href="#modes">Modes</a>
+        <a href="#voice">Voice</a>
+        <a href="#agents">Agents</a>
+      </nav>
+      <div class="nav-actions">
+        <a href="#download" class="btn btn-ghost">Sign in</a>
+        <a href="#download" class="btn btn-solid magnetic">Download</a>
+      </div>
+      <button class="nav-burger" id="navBurger" aria-label="Menu"><span></span><span></span><span></span></button>
+    </header>
+
+    <main id="top">
+      <!-- ─── Hero ──────────────────────────────────────────────────── -->
+      <section class="hero">
+        <div class="hero-inner">
+          <a class="badge reveal" href="#models">
+            <span class="badge-dot"></span> Powered by the Voyager model series
+            <span class="badge-arrow">→</span>
+          </a>
+          <h1 class="hero-title reveal" data-delay="1">
+            The AI copilot that<br /><span class="shimmer">actually sees your screen.</span>
+          </h1>
+          <p class="hero-sub reveal" data-delay="2">
+            Orbit is a desktop companion that watches your screen, edits your code, automates your
+            machine, and listens — offline. One quiet overlay, infinite reach. Charted by Voyager.
+          </p>
+          <div class="hero-cta reveal" data-delay="3">
+            <a href="#download" class="btn btn-solid btn-lg magnetic">
+              <svg viewBox="0 0 24 24" class="ico"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+              Download for Windows
+            </a>
+            <a href="#features" class="btn btn-ghost btn-lg">Explore features</a>
+          </div>
+          <div class="hero-stats reveal" data-delay="4">
+            <div class="stat"><span class="stat-num" data-count="7">0</span><span class="stat-label">Voyager models</span></div>
+            <div class="stat-div"></div>
+            <div class="stat"><span class="stat-num" data-count="100">0</span><span class="stat-suffix">%</span><span class="stat-label">Local voice</span></div>
+            <div class="stat-div"></div>
+            <div class="stat"><span class="stat-num" data-count="12">0</span><span class="stat-label">Agent steps / run</span></div>
+            <div class="stat-div"></div>
+            <div class="stat"><span class="stat-num" data-count="0" data-text="∞">0</span><span class="stat-label">Windows reachable</span></div>
+          </div>
+        </div>
+
+        <!-- Floating app mock -->
+        <div class="hero-mock reveal" data-delay="5" id="heroMock">
+          <div class="mock-glow"></div>
+          <div class="window">
+            <div class="window-bar">
+              <span class="brand-mark sm"><span class="brand-core"></span></span>
+              <span class="window-title">orbit · overlay</span>
+              <span class="window-dots"><i></i><i></i><i></i></span>
+            </div>
+            <div class="window-body">
+              <div class="chat-line user"><span class="who">You</span><span class="bubble">Refactor this auth handler and run the tests</span></div>
+              <div class="chat-line ai">
+                <span class="who">Voyager</span>
+                <div class="ai-body">
+                  <p id="typeTarget"></p>
+                  <div class="tool-card">
+                    <div class="tool-head"><span class="tool-dot"></span> patch_file <span class="tool-path">src/auth/handler.ts</span><span class="tool-ok">✓</span></div>
+                  </div>
+                  <div class="tool-card">
+                    <div class="tool-head"><span class="tool-dot run"></span> execute_command <span class="tool-path">npm test</span><span class="tool-spin"></span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="window-composer">
+              <span class="composer-pill">⌘ Voyager 2 Pro</span>
+              <span class="composer-pill">▣ Agents</span>
+              <span class="composer-input">Ask anything · @ to mention · / for actions</span>
+              <span class="composer-send">→</span>
+            </div>
+          </div>
+          <!-- Orbiting satellites -->
+          <div class="orbit-ring r1"><span class="sat"></span></div>
+          <div class="orbit-ring r2"><span class="sat"></span></div>
+        </div>
+
+        <div class="scroll-hint reveal" data-delay="6"><span></span>scroll</div>
+      </section>
+
+      <!-- ─── Marquee ───────────────────────────────────────────────── -->
+      <div class="marquee" aria-hidden="true">
+        <div class="marquee-track">
+          <span>SEES YOUR SCREEN</span><span>•</span><span>EDITS YOUR CODE</span><span>•</span>
+          <span>RUNS YOUR TESTS</span><span>•</span><span>AUTOMATES YOUR DESKTOP</span><span>•</span>
+          <span>OFFLINE VOICE</span><span>•</span><span>BACKGROUND AGENTS</span><span>•</span>
+          <span>SEES YOUR SCREEN</span><span>•</span><span>EDITS YOUR CODE</span><span>•</span>
+          <span>RUNS YOUR TESTS</span><span>•</span><span>AUTOMATES YOUR DESKTOP</span><span>•</span>
+          <span>OFFLINE VOICE</span><span>•</span><span>BACKGROUND AGENTS</span><span>•</span>
+        </div>
+      </div>
+
+      <!-- ─── Features (bento) ──────────────────────────────────────── -->
+      <section class="section" id="features">
+        <div class="section-head reveal">
+          <span class="eyebrow">Capabilities</span>
+          <h2>Everything a copilot should do —<br />and most it never could.</h2>
+          <p>Orbit doesn't live in a tab. It lives on your desktop, watching, reading, writing, and acting.</p>
+        </div>
+
+        <div class="bento">
+          <article class="card tilt span-2 reveal">
+            <div class="card-ico">▦</div>
+            <h3>Screen-aware context</h3>
+            <p>Orbit captures your screen — or just a region you draw — and reasons over what it sees. Worksheets, stack traces, designs, dashboards. No copy-paste.</p>
+            <div class="card-art screen-art"><span></span><span></span><span></span></div>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">✎</div>
+            <h3>Real file edits</h3>
+            <p>Surgical <code>patch_file</code> diffs, full writes, moves, deletes — sandboxed to your workspace with an undo timeline.</p>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">⌘</div>
+            <h3>Runs commands</h3>
+            <p>Builds, tests, installs — Orbit runs them in your shell and reads the output to keep going.</p>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">⊹</div>
+            <h3>Desktop automation</h3>
+            <p>Types into any window, clicks pixels, scrolls, fires hotkeys, opens URLs. It targets apps by title <em>or</em> process name.</p>
+          </article>
+
+          <article class="card tilt span-2 reveal">
+            <div class="card-ico">◷</div>
+            <h3>Background agents</h3>
+            <p>Dispatch autonomous agents that grind through up to 12 steps on their own — editing, running, verifying — while you keep working. Pause, inject instructions, or undo anytime.</p>
+            <div class="card-art agents-art"><i></i><i></i><i></i><i></i><i></i></div>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">⌕</div>
+            <h3>Workspace search &amp; git</h3>
+            <p>Greps your codebase, reads files by line range, and inspects <code>git status</code>, <code>diff</code> &amp; <code>log</code> — read-only and fast.</p>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">▤</div>
+            <h3>Any file, any media</h3>
+            <p>Attach images, PDFs, code, or drop a YouTube link — Orbit reads and reasons over all of it.</p>
+          </article>
+
+          <article class="card tilt reveal">
+            <div class="card-ico">✦</div>
+            <h3>Two surfaces</h3>
+            <p>A quiet floating overlay for quick asks, or the full standalone app for deep work. Switch in a click.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ─── Models ────────────────────────────────────────────────── -->
+      <section class="section" id="models">
+        <div class="section-head reveal">
+          <span class="eyebrow">The Voyager series</span>
+          <h2>One probe for every distance.</h2>
+          <p>From feather-light chat to apex engineering. Or let <strong>Auto</strong> route each message to the right craft.</p>
+        </div>
+
+        <div class="models">
+          <article class="model-card reveal">
+            <span class="model-glyph">⊛</span>
+            <h3>Auto</h3>
+            <p>Reads your prompt and routes to Flash or Pro automatically.</p>
+            <span class="model-tag">Smart routing</span>
+          </article>
+          <article class="model-card reveal">
+            <span class="model-glyph">⬦</span>
+            <h3>Voyager 1 Flash</h3>
+            <p>Instant, low-cost everyday dictation and chat.</p>
+            <span class="model-tag">Fastest</span>
+          </article>
+          <article class="model-card reveal">
+            <span class="model-glyph">✧</span>
+            <h3>Voyager 1</h3>
+            <p>Warm, natural conversation for general questions.</p>
+            <span class="model-tag">Conversational</span>
+          </article>
+          <article class="model-card reveal">
+            <span class="model-glyph">✦</span>
+            <h3>Voyager 2</h3>
+            <p>Cutting-edge reasoning — the experimental preview tier.</p>
+            <span class="model-tag">Preview</span>
+          </article>
+          <article class="model-card featured reveal">
+            <span class="model-glyph">⬡</span>
+            <h3>Voyager 2 Pro</h3>
+            <p>The apex. Heavy-duty architecture, debugging, and flawless coding automation.</p>
+            <span class="model-tag">Flagship</span>
+          </article>
+          <article class="model-card reveal">
+            <span class="model-glyph">◈</span>
+            <h3>Voyager 2.1 Preview</h3>
+            <p>Refined balance of speed, depth, and disciplined tool use.</p>
+            <span class="model-tag">Newest</span>
+          </article>
+          <article class="model-card reveal">
+            <span class="model-glyph">❖</span>
+            <h3>Orchestra 1.1</h3>
+            <p>A master planner &amp; prompt engineer — bulletproof step-by-step plans.</p>
+            <span class="model-tag">Planner</span>
+          </article>
+        </div>
+      </section>
+
+      <!-- ─── Modes ─────────────────────────────────────────────────── -->
+      <section class="section" id="modes">
+        <div class="section-head reveal">
+          <span class="eyebrow">Three gears</span>
+          <h2>Ask. Agents. Planning.</h2>
+          <p>Shift Orbit's posture to match the work in front of you.</p>
+        </div>
+        <div class="modes">
+          <button class="mode reveal is-active" data-mode="ask">
+            <span class="mode-key">❯</span>
+            <h3>Ask</h3>
+            <p>Quick answers with full screen &amp; workspace context. Read-only tools always on hand.</p>
+          </button>
+          <button class="mode reveal" data-mode="agents">
+            <span class="mode-key">▣</span>
+            <h3>Agents</h3>
+            <p>Hands-on engineering. Orbit edits files, runs commands, and verifies — autonomously.</p>
+          </button>
+          <button class="mode reveal" data-mode="planning">
+            <span class="mode-key">☰</span>
+            <h3>Planning</h3>
+            <p>Orchestra drafts bulletproof, copy-pasteable plans and prompts — no side effects.</p>
+          </button>
+        </div>
+      </section>
+
+      <!-- ─── Presets ───────────────────────────────────────────────── -->
+      <section class="section" id="presets">
+        <div class="section-head reveal">
+          <span class="eyebrow">Presets</span>
+          <h2>One assistant, many minds.</h2>
+          <p>Flip a preset and Orbit's whole personality and prompt re-tune around your task.</p>
+        </div>
+        <div class="presets reveal">
+          <span class="preset">✦ General</span>
+          <span class="preset">✎ Studying</span>
+          <span class="preset">⌘ Coding</span>
+          <span class="preset">∑ Math</span>
+          <span class="preset">✍ Writing</span>
+        </div>
+      </section>
+
+      <!-- ─── Voice ─────────────────────────────────────────────────── -->
+      <section class="section split" id="voice">
+        <div class="split-text reveal">
+          <span class="eyebrow">Offline voice</span>
+          <h2>Talk to it.<br />Nothing leaves your machine.</h2>
+          <p>Dictation runs on a local Whisper model — fully offline, fully private. No cloud, no upload, no latency tax. Cached once, instant forever.</p>
+          <ul class="ticks">
+            <li>100% on-device transcription</li>
+            <li>GPU-accelerated where available</li>
+            <li>Silence &amp; hallucination gating built in</li>
+          </ul>
+        </div>
+        <div class="split-art reveal">
+          <canvas id="wave" class="wave" aria-hidden="true"></canvas>
+          <div class="mic-orb"><span class="mic-ring"></span><span class="mic-ring"></span><svg viewBox="0 0 24 24" class="ico"><rect x="9" y="3" width="6" height="10" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg></div>
+        </div>
+      </section>
+
+      <!-- ─── Agents how-it-works ───────────────────────────────────── -->
+      <section class="section" id="agents">
+        <div class="section-head reveal">
+          <span class="eyebrow">Autonomy</span>
+          <h2>Launch it. Walk away.</h2>
+          <p>Background agents work a task end-to-end and report back.</p>
+        </div>
+        <div class="steps">
+          <div class="step reveal"><span class="step-n">01</span><h3>Describe the task</h3><p>“Implement tic-tac-toe in Python and write tests.”</p></div>
+          <div class="step-link" aria-hidden="true"></div>
+          <div class="step reveal"><span class="step-n">02</span><h3>It investigates</h3><p>Greps, reads the right files, and forms a plan.</p></div>
+          <div class="step-link" aria-hidden="true"></div>
+          <div class="step reveal"><span class="step-n">03</span><h3>It builds &amp; verifies</h3><p>Writes code, runs tests, fixes failures — looped.</p></div>
+          <div class="step-link" aria-hidden="true"></div>
+          <div class="step reveal"><span class="step-n">04</span><h3>You stay in control</h3><p>Pause, inject instructions, or undo via the timeline.</p></div>
+        </div>
+      </section>
+
+      <!-- ─── Download CTA ──────────────────────────────────────────── -->
+      <section class="cta" id="download">
+        <div class="cta-inner reveal">
+          <div class="brand-mark xl"><span class="brand-core"></span></div>
+          <h2>Point Voyager at your work.</h2>
+          <p>Bring a screen-aware copilot to your desktop. Free to try.</p>
+          <div class="hero-cta">
+            <a href="#" class="btn btn-solid btn-lg magnetic">
+              <svg viewBox="0 0 24 24" class="ico"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+              Download for Windows
+            </a>
+            <a href="#top" class="btn btn-ghost btn-lg">Back to top</a>
+          </div>
+          <p class="cta-fine">Windows 10/11 · Electron · ~120 MB</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="#top"><span class="brand-mark sm"><span class="brand-core"></span></span><span class="brand-name">ORBIT</span></a>
+          <p>A screen-aware desktop copilot, charted by the Voyager model series.</p>
+        </div>
+        <div class="footer-col"><h4>Product</h4><a href="#features">Features</a><a href="#models">Models</a><a href="#modes">Modes</a><a href="#voice">Voice</a></div>
+        <div class="footer-col"><h4>Explore</h4><a href="#agents">Agents</a><a href="#presets">Presets</a><a href="#download">Download</a></div>
+        <div class="footer-col"><h4>More</h4><a href="#top">About</a><a href="#top">Privacy</a><a href="#top">Contact</a></div>
+      </div>
+      <div class="footer-base">
+        <span>© <span id="year"></span> Orbit</span>
+        <span class="footer-tag">Made among the stars ✦</span>
+      </div>
+    </footer>
+
+    <script src="./script.js" type="module"></script>
+  </body>
+</html>
