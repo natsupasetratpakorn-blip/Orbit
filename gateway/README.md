@@ -23,28 +23,30 @@ GCP login**. It sits on your VPS between the desktop app and Vertex AI:
 | Desktop app | ❌ no | ❌ no | shows only |
 | **Gateway (this)** | ✅ yes | ✅ `config.js` | ✅ `usage.json` |
 
-## 1. Create a service account (once)
+## 1. Authenticate to Vertex (once)
 
-In your GCP project, make a service account with the **Vertex AI User** role and
-download its JSON key:
+The gateway uses **Application Default Credentials**, so you don't need a
+service-account key (handy if your org disables SA keys). Just log in with
+gcloud on the box:
 
 ```bash
-gcloud iam service-accounts create orbit-gateway --display-name "Orbit Gateway"
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-  --member "serviceAccount:orbit-gateway@YOUR_PROJECT.iam.gserviceaccount.com" \
-  --role roles/aiplatform.user
-gcloud iam service-accounts keys create orbit-sa-key.json \
-  --iam-account orbit-gateway@YOUR_PROJECT.iam.gserviceaccount.com
+gcloud auth application-default login --no-launch-browser
+gcloud auth application-default set-quota-project YOUR_PROJECT
+gcloud services enable aiplatform.googleapis.com --project YOUR_PROJECT
 ```
 
-This key is the **only** secret on the box, and it's scoped to Vertex only — it
-is *not* your personal gcloud login.
+That login is stored under `~/.config/gcloud/` and `GoogleAuth` finds it
+automatically — leave `GOOGLE_APPLICATION_CREDENTIALS` unset.
+
+> Prefer a service-account key (and your org allows it)? Create one with the
+> **Vertex AI User** role and point `GOOGLE_APPLICATION_CREDENTIALS` at the JSON
+> file instead. Either path works.
 
 ## 2. Configure
 
 ```bash
 cd gateway
-cp .env.example .env          # set GCP_PROJECT, GCP_LOCATION, key path, PORT
+cp .env.example .env          # set GCP_PROJECT, GCP_LOCATION, PORT
 npm install
 ```
 

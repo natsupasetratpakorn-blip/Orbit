@@ -24,7 +24,10 @@ if (!PROJECT) {
   process.exit(1);
 }
 
-// Vertex auth via the runtime service account / GOOGLE_APPLICATION_CREDENTIALS.
+// Vertex auth via Application Default Credentials. GoogleAuth resolves these in
+// order: GOOGLE_APPLICATION_CREDENTIALS (a key file, if set), then a `gcloud auth
+// application-default login` token, then the runtime service account. So a
+// plain gcloud login on the box works with no key file.
 const auth = new GoogleAuth({ scopes: "https://www.googleapis.com/auth/cloud-platform" });
 
 // ─── Usage tracking (per license key, per UTC day) ──────────────────────────

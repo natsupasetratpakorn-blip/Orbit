@@ -10,10 +10,15 @@ services:
     restart: unless-stopped
     env_file: ./gateway.env            # you create this (see DEPLOY.md)
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /data/orbit-sa-key.json
       USAGE_FILE: /data/usage.json
+      # Use the gcloud login you ran on the host (no service-account key needed).
+      # We mount the host's gcloud config below and point ADC at the token file.
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/application_default_credentials.json
     volumes:
-      - ./data:/data                   # holds your GCP key + usage counts
+      - ./data:/data                   # holds usage counts
+      # Your host gcloud login (from `gcloud auth application-default login`).
+      # ${HOME}/.config/gcloud is where ADC + the quota project are stored.
+      - ${HOME}/.config/gcloud:/gcloud:ro
       # Live-mount the plans/keys file so changing a plan just needs a restart,
       # not a rebuild:  docker compose restart gateway
       - ../gateway/config.js:/app/config.js:ro

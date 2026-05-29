@@ -56,32 +56,37 @@ cd orbit/deploy
 
 (Replace `YOUR_REPO_URL` with wherever this project lives on GitHub.)
 
-## Step 5 — Add your Google Cloud key
+## Step 5 — Give the server permission to use Vertex AI
 
-The server needs permission to use Vertex AI. You make a "service account key"
-once. On your **own computer** (where `gcloud` is set up), run:
+The server needs to log into Google Cloud. The simplest way (and the only way if
+your org blocks service-account keys) is to log in **on the server itself** with
+gcloud — no key file to create or copy around.
 
-```bash
-gcloud iam service-accounts create orbit-gateway
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member "serviceAccount:orbit-gateway@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-  --role roles/aiplatform.user
-gcloud iam service-accounts keys create orbit-sa-key.json \
-  --iam-account orbit-gateway@YOUR_PROJECT_ID.iam.gserviceaccount.com
-```
-
-This makes a file `orbit-sa-key.json`. **Copy it to the server** into
-`orbit/deploy/data/`:
+On the **server**, install gcloud and log in:
 
 ```bash
-# on the server:
-mkdir -p ~/orbit/deploy/data
-# then, from your computer, upload the file (run this on your computer):
-scp orbit-sa-key.json root@YOUR_SERVER_IP:~/orbit/deploy/data/
+# install the gcloud CLI (Debian/Ubuntu)
+curl -fsSL https://sdk.cloud.google.com | bash && exec -l $SHELL
+
+# log in without a browser on the box — it prints a URL, you open it on your
+# laptop, approve, and paste the code back:
+gcloud auth application-default login --no-launch-browser
+
+# tell gcloud which project to bill/use:
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
 
-> This key only allows using the AI — it is **not** your personal login and
-> can't touch the rest of your Google account.
+Make sure that Google account can use Vertex AI in the project (one-time):
+
+```bash
+gcloud services enable aiplatform.googleapis.com --project YOUR_PROJECT_ID
+```
+
+That's it — no `orbit-sa-key.json`. The login is stored at
+`~/.config/gcloud/`, and Docker Compose mounts it into the gateway for you.
+
+> Running with `node` directly instead of Docker? Nothing more to do — the
+> gateway auto-detects this login. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset.
 
 ## Step 6 — Fill in two settings and start it
 
@@ -178,7 +183,7 @@ Change a number there if you want; restart the gateway to apply.
 
 ### Why this is safe to sell
 
-- Your Google Cloud key sits **only** on your server, never in the app.
+- Your Google Cloud login sits **only** on your server, never in the app.
 - Friends get a license key that **only** works against your server — it gives
   them no access to your cloud account.
 - The daily limit is counted **on your server**, so they can't cheat it.
