@@ -9,13 +9,14 @@ import {
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
 import { PRESETS, DEFAULT_PRESET, normalizePreset, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
 import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
+import { GATEWAY_URL } from "../shared/cloud-config.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
 const DEFAULT_MODEL = "Voyager 1 Flash";
-// The Orbit Cloud gateway (your VPS). Customers only paste a license key; the
-// URL is fixed here. Leave a license key blank to use direct gcloud (dev mode).
-const GATEWAY_URL = "https://orbit.masher.me";
+// The Orbit Cloud gateway URL is shared with the main process (and overlay) via
+// cloud-config.js. Customers only paste a license key; the main process owns
+// the key. Leave it blank to use direct gcloud (dev mode).
 const MODES = ["ask", "agents", "planning"];
 const MODE_LABELS = { ask: "❯ Ask", agents: "▣ Agents", planning: "☰ Planning" };
 
@@ -2447,6 +2448,8 @@ function openSettingsModal() {
   const saveCloud = () => {
     cloud = { licenseKey: licenseKeyEl.value.trim() };
     persistState();
+    // Push to the main process so the overlay (and all AI calls) use this key.
+    window.orbit?.setCloud?.({ licenseKey: cloud.licenseKey });
   };
   licenseKeyEl.addEventListener("change", saveCloud);
   body.querySelector("#setActivate").addEventListener("click", async () => {
@@ -2840,5 +2843,20 @@ setupSolarBackground();
 setupCursorGlow();
 render();
 autoResize();
-// If a license is configured, verify the plan + usage with the gateway.
-refreshUsage({ silent: true });
+// Reconcile the license with the main process (the single source of truth for
+// both the app and the overlay), then verify the plan + usage with the gateway.
+(async () => {
+  try {
+    const stored = await window.orbit?.getCloud?.();
+    if (stored) {
+      if (!stored.licenseKey && cloud.licenseKey) {
+        // App had a key from a previous version's local storage — migrate it up.
+        await window.orbit?.setCloud?.({ licenseKey: cloud.licenseKey });
+      } else if (stored.licenseKey !== cloud.licenseKey) {
+        cloud = { licenseKey: stored.licenseKey };
+        persistState();
+      }
+    }
+  } catch { /* fall back to local cloud state */ }
+  refreshUsage({ silent: true });
+})();

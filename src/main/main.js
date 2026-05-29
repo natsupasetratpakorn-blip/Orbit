@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, screen, dialog, session, shell, Tray, Menu, globalShortcut, clipboard } from "electron";
 import { mkdir, readFile, writeFile, readdir, stat as statAsync, unlink, rename } from "node:fs/promises";
-import { existsSync, rmSync, readdirSync, statSync } from "node:fs";
+import { existsSync, rmSync, readdirSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec, spawn } from "node:child_process";
@@ -12,6 +12,7 @@ import { createHistoryStore } from "../shared/history-store.js";
 import { getOverlayBounds } from "../shared/overlay-window.js";
 import { sendToModel, transcribeAudioGCP } from "../shared/ai-service.js";
 import { createTimelineSnapshot, isAllowedExternalUrl, normalizeWorkspaceRoot, resolveInsideWorkspace } from "../shared/workspace-security.js";
+import { GATEWAY_URL } from "../shared/cloud-config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +22,24 @@ let historyStore;
 const workspaceHistoryStores = new Map();
 let tray = null;
 let activeWorkspacePath = "";
+
+// ─── Orbit Cloud license (single source of truth for app + overlay) ──────────
+// The license key lives here in the main process and is persisted to disk, so
+// both the full app and the floating overlay route AI calls through the gateway
+// with the same key. With no key, ai:send falls back to direct gcloud (dev).
+let cloudConfig = { licenseKey: "" };
+function cloudConfigPath() { return join(app.getPath("userData"), "cloud.json"); }
+function loadCloudConfig() {
+  try {
+    const raw = readFileSync(cloudConfigPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    cloudConfig = { licenseKey: String(parsed.licenseKey || "").trim() };
+  } catch { cloudConfig = { licenseKey: "" }; }
+}
+function saveCloudConfig() {
+  try { writeFileSync(cloudConfigPath(), JSON.stringify(cloudConfig)); }
+  catch (e) { console.warn("cloud config save failed:", e.message); }
+}
 // Orbit opens in the full standalone app ("mission-control") by default; users
 // can switch to the floating overlay via the in-app toggle or the tray.
 let currentRendererMode = "app";
@@ -842,8 +861,19 @@ function registerIpc() {
     scheduleWindowStateSave();
     return { ok: true, displayId: display.id };
   });
+  ipcMain.handle("cloud:get", () => ({ licenseKey: cloudConfig.licenseKey, gatewayUrl: GATEWAY_URL }));
+  ipcMain.handle("cloud:set", (_event, cfg) => {
+    cloudConfig = { licenseKey: String(cfg?.licenseKey || "").trim() };
+    saveCloudConfig();
+    return { ok: true };
+  });
+
   ipcMain.handle("ai:send", async (event, payload) => {
-    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset, gatewayUrl, licenseKey } = payload ?? {};
+    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset } = payload ?? {};
+    // License is owned by the main process, not the caller — so the app and the
+    // overlay both route through the gateway with the same key. No key → direct.
+    const licenseKey = cloudConfig.licenseKey;
+    const gatewayUrl = licenseKey ? GATEWAY_URL : "";
     const { imageBase64, mimeType } = await loadScreenshotBase64(screenshotPath);
     const { parts: attachmentParts, text: attachmentText } = await loadAttachmentParts(attachments);
 
@@ -1786,6 +1816,7 @@ app.whenReady().then(async () => {
   await resetHistoryOnStartup();
   windowStateStorePath = join(app.getPath("userData"), "window-state.json");
   savedWindowState = await loadSavedWindowState();
+  loadCloudConfig();
   registerIpc();
   createOverlayWindow();
   createSystemTray();

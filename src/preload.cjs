@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld("orbit", {
   setOverlayState: (state) => ipcRenderer.invoke("overlay:set-state", state),
   sendToAI: (payload) => ipcRenderer.invoke("ai:send", payload),
   abortAI: (streamId) => ipcRenderer.invoke("ai:abort", { streamId }),
+  // Orbit Cloud license — owned by the main process so the app and overlay
+  // share one license and both route through the gateway.
+  getCloud: () => ipcRenderer.invoke("cloud:get"),
+  setCloud: (cfg) => ipcRenderer.invoke("cloud:set", cfg),
   onAIChunk: (handler) => {
     const wrapped = (_, data) => handler(data);
     ipcRenderer.on("ai:chunk", wrapped);
