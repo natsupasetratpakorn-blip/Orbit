@@ -402,6 +402,11 @@ kbd {
   border-radius: 999px;
   color: var(--muted);
 }
+.stat-pill-warn {
+  color: #fda4af;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+}
 
 /* Empty state */
 .empty-state {

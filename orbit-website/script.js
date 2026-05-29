@@ -510,3 +510,21 @@ if (!reduceMotion) {
   dio.observe(screen);
 })();
 
+// ─── Billing toggle (monthly / yearly) ──────────────────────────────────
+(function billing() {
+  const monthly = $("#billMonthly"), yearly = $("#billYearly");
+  if (!monthly || !yearly) return;
+  const amts = $$(".plan-amt");
+  const pers = $$(".plan-per");
+  function apply(isYear) {
+    monthly.classList.toggle("is-active", !isYear);
+    yearly.classList.toggle("is-active", isYear);
+    monthly.setAttribute("aria-selected", String(!isYear));
+    yearly.setAttribute("aria-selected", String(isYear));
+    amts.forEach((a) => { a.textContent = isYear ? a.dataset.y : a.dataset.m; });
+    pers.forEach((p) => { p.textContent = isYear ? "/mo · billed yearly" : "/mo"; p.classList.toggle("yearly", isYear); });
+  }
+  monthly.addEventListener("click", () => apply(false));
+  yearly.addEventListener("click", () => apply(true));
+})();
+

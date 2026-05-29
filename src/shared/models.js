@@ -56,3 +56,26 @@ export const DEFAULT_PRESET = "general";
 export function normalizePreset(preset) {
   return PRESETS.some((p) => p.id === preset) ? preset : DEFAULT_PRESET;
 }
+
+// ─── Plans & rate limits ─────────────────────────────────────────────────────
+// Subscription tiers (mirrors the website). `dailyLimit` is the number of
+// user-initiated AI messages allowed per day; Interstellar is uncapped. These
+// ids must match the website's plan markup. Limits are enforced client-side in
+// the app today; a licensing server should authorize the active plan later.
+export const PLANS = [
+  { id: "liftoff", label: "Liftoff", priceTHB: 189, dailyLimit: 50 },
+  { id: "orbit", label: "Orbit", priceTHB: 299, dailyLimit: 200 },
+  { id: "deepspace", label: "Deep Space", priceTHB: 450, dailyLimit: 600 },
+  { id: "interstellar", label: "Interstellar", priceTHB: 599, dailyLimit: Infinity }
+];
+export const DEFAULT_PLAN = "liftoff";
+
+export function normalizePlan(plan) {
+  return PLANS.some((p) => p.id === plan) ? plan : DEFAULT_PLAN;
+}
+export function getPlan(plan) {
+  return PLANS.find((p) => p.id === normalizePlan(plan)) || PLANS[0];
+}
+export function planDailyLimit(plan) {
+  return getPlan(plan).dailyLimit;
+}

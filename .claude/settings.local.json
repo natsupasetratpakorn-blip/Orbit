@@ -14,7 +14,26 @@
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-Process *)",
       "PowerShell(Test-Path *)",
-      "Bash(node --check src/app-renderer/app.js)"
+      "Bash(node --check src/app-renderer/app.js)",
+      "Bash(node --check src/shared/parser.js)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(node --check src/shared/history-store.js)",
+      "Bash(node *)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/huggingface/transformers.js/3.7.5/src/utils/hub.js\")",
+      "Bash(py --version)",
+      "Bash(python *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8080/)",
+      "Bash(curl -s -o /dev/null -w \"styles.css %{http_code}\\\\n\" http://localhost:8080/styles.css)",
+      "Bash(curl -s -o /dev/null -w \"script.js %{http_code}\\\\n\" http://localhost:8080/script.js)",
+      "Bash(cmd.exe *)",
+      "Bash(git *)",
+      "Bash(curl -s -o /dev/null -w \"html %{http_code} css %{http_code}\\\\n\" http://localhost:8080/)",
+      "Bash(curl -s http://localhost:8080/index.html)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(curl -s -o /dev/null -w \"site %{http_code}\\\\n\" http://localhost:8080/)",
+      "Bash(curl -s -o /dev/null -w \"site %{http_code} og %{http_code}\\\\n\" http://localhost:8080/)"
     ]
   }
 }

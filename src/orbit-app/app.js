@@ -7,7 +7,7 @@ import {
   selectProject
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
-import { PRESETS, DEFAULT_PRESET, normalizePreset } from "../shared/models.js";
+import { PRESETS, DEFAULT_PRESET, normalizePreset, PLANS, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
 import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
@@ -66,12 +66,14 @@ const cursorGlow = $("#cursorGlow");
 const viewModeButton = $("#viewModeButton");
 const chatStatTokens = $("#chatStatTokens");
 const chatStatMessages = $("#chatStatMessages");
+const chatStatPlan = $("#chatStatPlan");
 
 // ─── State ───────────────────────────────────────────────────────────────
 let state = loadState();
 let selectedModel = state.selectedModel || DEFAULT_MODEL;
 let currentMode = MODES.includes(state.currentMode) ? state.currentMode : "ask";
 let selectedPreset = normalizePreset(state.selectedPreset);
+let selectedPlan = normalizePlan(state.selectedPlan);
 let attachScreenshot = !!state.attachScreenshot;
 let attachedFiles = []; // { name, path }
 let pendingRegionShot = null; // path of a one-shot region capture
@@ -129,8 +131,49 @@ function persistState() {
   state.selectedModel = selectedModel;
   state.currentMode = currentMode;
   state.selectedPreset = selectedPreset;
+  state.selectedPlan = selectedPlan;
   state.attachScreenshot = attachScreenshot;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+// ─── Plan rate limiting ────────────────────────────────────────────────────
+// Each plan caps user-initiated AI messages per day (see models.js). Usage is
+// tracked locally and resets at the start of each day. This is a client-side
+// guard for now — a licensing server should authorize the plan + usage later.
+function todayKey() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (local-ish, UTC date)
+}
+function getUsage() {
+  if (!state.usage || state.usage.date !== todayKey()) {
+    state.usage = { date: todayKey(), count: 0 };
+  }
+  return state.usage;
+}
+function planLimitValue() {
+  return planDailyLimit(selectedPlan);
+}
+// True if the user still has budget for another AI message today.
+function withinRateLimit() {
+  const limit = planLimitValue();
+  if (limit === Infinity) return true;
+  return getUsage().count < limit;
+}
+function recordUsage() {
+  const u = getUsage();
+  u.count += 1;
+  persistState();
+  updatePlanPill();
+}
+function updatePlanPill() {
+  if (!chatStatPlan) return;
+  const plan = getPlan(selectedPlan);
+  const limit = planLimitValue();
+  const used = getUsage().count;
+  chatStatPlan.textContent = limit === Infinity
+    ? `${plan.label} · ${used}/∞`
+    : `${plan.label} · ${used}/${limit}`;
+  chatStatPlan.classList.toggle("stat-pill-warn", limit !== Infinity && used >= limit);
+  chatStatPlan.title = `Plan: ${plan.label} — ${used} of ${limit === Infinity ? "unlimited" : limit} daily messages used. Contact M4sh3r to change plans.`;
 }
 
 // ─── Utility: toast ──────────────────────────────────────────────────────
@@ -313,6 +356,7 @@ function renderMessages() {
 
   chatStatTokens.textContent = `${formatTokens(totalTokens)} tk`;
   chatStatMessages.textContent = `${messages.filter((m) => !m.isToolResult).length} msg`;
+  updatePlanPill();
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -989,9 +1033,19 @@ async function sendMessage(rawText) {
     }
   }
 
+  // Plan rate limit. Answering a clarifying question is a continuation of an
+  // existing turn, so it doesn't consume budget; everything else does.
+  const countsAgainstLimit = !text.startsWith("**User's Answers:**");
+  if (countsAgainstLimit && !withinRateLimit()) {
+    const plan = getPlan(selectedPlan);
+    toast(`Daily limit reached — ${getUsage().count}/${planLimitValue()} messages on the ${plan.label} plan. Contact M4sh3r to upgrade.`, "error", 6000);
+    return;
+  }
+
   // Fresh user turn — reset the autonomous tool-loop counter so the agent
   // loop can run again from zero for this request.
   agentStepsThisTurn = 0;
+  if (countsAgainstLimit) recordUsage();
 
   const attachmentsSnapshot = attachedFiles.slice();
   const userMessage = {
@@ -2281,6 +2335,16 @@ function openSettingsModal() {
       </select>
     </div>
     <div class="settings-row">
+      <label>Plan<br><span style="font-size:11px;opacity:.6;">Sets your daily message limit · contact M4sh3r to change</span></label>
+      <select id="setPlan">
+        ${PLANS.map((p) => `<option value="${p.id}">${escapeHtml(p.label)} — ${p.dailyLimit === Infinity ? "unlimited" : p.dailyLimit + "/day"}</option>`).join("")}
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Usage today</label>
+      <span id="setUsage" style="font-size:13px;opacity:.8;font-variant-numeric:tabular-nums;"></span>
+    </div>
+    <div class="settings-row">
       <label>Auto-attach screenshot to every message</label>
       <input type="checkbox" id="setAttachShot">
     </div>
@@ -2293,7 +2357,25 @@ function openSettingsModal() {
   body.querySelector("#setDefaultModel").value = selectedModel;
   body.querySelector("#setDefaultMode").value = currentMode;
   body.querySelector("#setPreset").value = selectedPreset;
+  body.querySelector("#setPlan").value = selectedPlan;
   body.querySelector("#setAttachShot").checked = attachScreenshot;
+
+  const usageEl = body.querySelector("#setUsage");
+  const renderUsageLine = () => {
+    const limit = planLimitValue();
+    const used = getUsage().count;
+    usageEl.textContent = `${used} / ${limit === Infinity ? "∞" : limit} messages`;
+  };
+  renderUsageLine();
+
+  body.querySelector("#setPlan").addEventListener("change", (e) => {
+    selectedPlan = normalizePlan(e.target.value);
+    persistState();
+    updatePlanPill();
+    renderUsageLine();
+    const p = getPlan(selectedPlan);
+    toast(`Plan: ${p.label}`, "success", 1800);
+  });
 
   body.querySelector("#setPreset").addEventListener("change", (e) => {
     selectedPreset = normalizePreset(e.target.value);
@@ -2329,10 +2411,12 @@ function openSettingsModal() {
     selectedModel = DEFAULT_MODEL;
     currentMode = "ask";
     selectedPreset = DEFAULT_PRESET;
+    selectedPlan = DEFAULT_PLAN;
     attachScreenshot = false;
     setSelectedModel(selectedModel);
     setMode(currentMode);
     updateScreenshotToggleUI();
+    updatePlanPill();
     render();
     persistState();
     close();
