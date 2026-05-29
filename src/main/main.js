@@ -843,7 +843,7 @@ function registerIpc() {
     return { ok: true, displayId: display.id };
   });
   ipcMain.handle("ai:send", async (event, payload) => {
-    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset } = payload ?? {};
+    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset, gatewayUrl, licenseKey } = payload ?? {};
     const { imageBase64, mimeType } = await loadScreenshotBase64(screenshotPath);
     const { parts: attachmentParts, text: attachmentText } = await loadAttachmentParts(attachments);
 
@@ -871,6 +871,7 @@ function registerIpc() {
         model, messages, imageBase64, mimeType,
         attachmentParts, attachmentText,
         agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset,
+        gatewayUrl, licenseKey,
         abortSignal: controller.signal
       });
       return { ok: true, content: reply };

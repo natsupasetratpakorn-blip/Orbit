@@ -473,8 +473,18 @@ async function getGCPCredentials() {
   }
 }
 
-export async function sendToModel({ model, messages, imageBase64, mimeType, attachmentParts, attachmentText, agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset, abortSignal }) {
-  const { projectId, accessToken } = await getGCPCredentials();
+export async function sendToModel({ model, messages, imageBase64, mimeType, attachmentParts, attachmentText, agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset, abortSignal, gatewayUrl, licenseKey }) {
+  // Two auth modes:
+  //  • Gateway (selling): POST the request to YOUR proxy with a license key.
+  //    The proxy holds the GCP creds + enforces the plan limit. No gcloud here.
+  //  • Direct (you, dev): authenticate to Vertex straight from this machine via
+  //    gcloud. Used when no gatewayUrl is configured.
+  const useGateway = !!(gatewayUrl && String(gatewayUrl).trim());
+  const gatewayBase = useGateway ? String(gatewayUrl).trim().replace(/\/+$/, "") : "";
+  let projectId = null, accessToken = null;
+  if (!useGateway) {
+    ({ projectId, accessToken } = await getGCPCredentials());
+  }
 
   // Auto model routing — pick Flash or Pro based on heuristics over the
   // latest user message. Logged so users can see which model actually ran.
@@ -495,7 +505,12 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, atta
   const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
   // When the caller wants streaming, switch to streamGenerateContent + SSE.
   const endpoint = onChunk ? "streamGenerateContent?alt=sse" : "generateContent";
-  const url = `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:${endpoint}`;
+  // In gateway mode we hit the proxy (which appends auth + the real Vertex URL);
+  // in direct mode we hit Vertex itself. The streaming/parsing code below is
+  // identical because the gateway pipes Vertex's SSE through verbatim.
+  const url = useGateway
+    ? `${gatewayBase}/v1/generate?model=${encodeURIComponent(resolvedModel)}&stream=${onChunk ? 1 : 0}`
+    : `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${modelId}:${endpoint}`;
 
   const { history, latestUser } = splitHistory(messages);
 
@@ -577,7 +592,9 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, atta
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        // Gateway mode authenticates with the license key; direct mode with the
+        // gcloud access token.
+        "Authorization": `Bearer ${useGateway ? (licenseKey || "") : accessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(requestBody),
@@ -587,13 +604,21 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, atta
     clearTimeout(timeout);
 
     if (!response.ok) {
-      // Invalidate cached creds on auth errors
-      if (response.status === 401 || response.status === 403) {
+      // Invalidate cached creds on direct-mode auth errors.
+      if (!useGateway && (response.status === 401 || response.status === 403)) {
         _cachedCreds = null;
         _credsCachedAt = 0;
       }
       const errorText = await response.text();
-      throw new Error(`Vertex AI REST API error (${response.status}): ${errorText}`);
+      // Surface the gateway's plan-limit response as a recognizable error so the
+      // app can show a friendly "daily limit reached" message.
+      if (useGateway && response.status === 429) {
+        throw new Error(`RATE_LIMIT: ${errorText}`);
+      }
+      if (useGateway && (response.status === 401 || response.status === 403)) {
+        throw new Error(`LICENSE_INVALID: ${errorText}`);
+      }
+      throw new Error(`${useGateway ? "Orbit gateway" : "Vertex AI REST API"} error (${response.status}): ${errorText}`);
     }
 
     // Streaming path: parse SSE events as they arrive, push each text chunk

@@ -7,7 +7,7 @@ import {
   selectProject
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
-import { PRESETS, DEFAULT_PRESET, normalizePreset, PLANS, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
+import { PRESETS, DEFAULT_PRESET, normalizePreset, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
 import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
@@ -74,6 +74,16 @@ let selectedModel = state.selectedModel || DEFAULT_MODEL;
 let currentMode = MODES.includes(state.currentMode) ? state.currentMode : "ask";
 let selectedPreset = normalizePreset(state.selectedPreset);
 let selectedPlan = normalizePlan(state.selectedPlan);
+// Orbit Cloud: the gateway (your VPS) holds the GCP creds and enforces the
+// plan limit. The app authenticates with a license key; the plan it grants is
+// decided by the server, not chosen here. When no gatewayUrl is set the app
+// talks to Vertex directly via gcloud (developer/offline mode).
+let cloud = {
+  gatewayUrl: state.cloud?.gatewayUrl || "",
+  licenseKey: state.cloud?.licenseKey || ""
+};
+// Last plan/usage snapshot fetched from the gateway, or null in direct mode.
+let serverUsage = null; // { plan, label, used, dailyLimit(-1=∞) }
 let attachScreenshot = !!state.attachScreenshot;
 let attachedFiles = []; // { name, path }
 let pendingRegionShot = null; // path of a one-shot region capture
@@ -132,16 +142,24 @@ function persistState() {
   state.currentMode = currentMode;
   state.selectedPreset = selectedPreset;
   state.selectedPlan = selectedPlan;
+  state.cloud = cloud;
   state.attachScreenshot = attachScreenshot;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 // ─── Plan rate limiting ────────────────────────────────────────────────────
-// Each plan caps user-initiated AI messages per day (see models.js). Usage is
-// tracked locally and resets at the start of each day. This is a client-side
-// guard for now — a licensing server should authorize the plan + usage later.
+// The plan caps user-initiated AI messages per day. When the gateway is
+// configured it is authoritative — usage + plan come from the server and can't
+// be bypassed locally. Without a gateway we fall back to a local daily counter
+// (developer mode), so the pill still works offline.
+function gatewayActive() {
+  return !!(cloud.gatewayUrl && cloud.licenseKey);
+}
+function gatewayBase() {
+  return cloud.gatewayUrl ? cloud.gatewayUrl.trim().replace(/\/+$/, "") : "";
+}
 function todayKey() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (local-ish, UTC date)
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC date)
 }
 function getUsage() {
   if (!state.usage || state.usage.date !== todayKey()) {
@@ -149,31 +167,67 @@ function getUsage() {
   }
   return state.usage;
 }
-function planLimitValue() {
+// Effective daily limit (Infinity = unlimited) and used-count, sourced from the
+// server when a gateway is active, else from the local counter.
+function currentLimit() {
+  if (gatewayActive() && serverUsage) {
+    return serverUsage.dailyLimit < 0 ? Infinity : serverUsage.dailyLimit;
+  }
   return planDailyLimit(selectedPlan);
+}
+function currentUsed() {
+  if (gatewayActive() && serverUsage) return serverUsage.used;
+  return getUsage().count;
 }
 // True if the user still has budget for another AI message today.
 function withinRateLimit() {
-  const limit = planLimitValue();
-  if (limit === Infinity) return true;
-  return getUsage().count < limit;
+  const limit = currentLimit();
+  return limit === Infinity || currentUsed() < limit;
 }
 function recordUsage() {
+  // Server counts in gateway mode; locally we increment our own tally.
+  if (gatewayActive()) return;
   const u = getUsage();
   u.count += 1;
   persistState();
   updatePlanPill();
 }
+function planLabel() {
+  if (gatewayActive() && serverUsage) return serverUsage.label;
+  return getPlan(selectedPlan).label;
+}
 function updatePlanPill() {
   if (!chatStatPlan) return;
-  const plan = getPlan(selectedPlan);
-  const limit = planLimitValue();
-  const used = getUsage().count;
+  const label = planLabel();
+  const limit = currentLimit();
+  const used = currentUsed();
   chatStatPlan.textContent = limit === Infinity
-    ? `${plan.label} · ${used}/∞`
-    : `${plan.label} · ${used}/${limit}`;
+    ? `${label} · ${used}/∞`
+    : `${label} · ${used}/${limit}`;
   chatStatPlan.classList.toggle("stat-pill-warn", limit !== Infinity && used >= limit);
-  chatStatPlan.title = `Plan: ${plan.label} — ${used} of ${limit === Infinity ? "unlimited" : limit} daily messages used. Contact M4sh3r to change plans.`;
+  chatStatPlan.title = `Plan: ${label} — ${used} of ${limit === Infinity ? "unlimited" : limit} daily messages used. Contact M4sh3r to change plans.`;
+}
+
+// Ask the gateway for this license key's plan + today's usage. The server is
+// authoritative; the app only displays the result. No-op in direct mode.
+async function refreshUsage({ silent = false } = {}) {
+  if (!gatewayActive()) { serverUsage = null; updatePlanPill(); return; }
+  try {
+    const res = await fetch(`${gatewayBase()}/v1/usage`, {
+      headers: { Authorization: `Bearer ${cloud.licenseKey}` }
+    });
+    if (!res.ok) throw new Error(res.status === 401 ? "invalid license key" : `server ${res.status}`);
+    const data = await res.json();
+    serverUsage = { plan: data.plan, label: data.label, used: data.used, dailyLimit: data.dailyLimit };
+    selectedPlan = normalizePlan(data.plan);
+    persistState();
+    updatePlanPill();
+    if (!silent) toast(`Plan: ${data.label}`, "success", 2200);
+  } catch (err) {
+    serverUsage = null;
+    updatePlanPill();
+    if (!silent) toast(`License check failed: ${err.message}. Contact M4sh3r.`, "error", 5000);
+  }
 }
 
 // ─── Utility: toast ──────────────────────────────────────────────────────
@@ -1037,8 +1091,8 @@ async function sendMessage(rawText) {
   // existing turn, so it doesn't consume budget; everything else does.
   const countsAgainstLimit = !text.startsWith("**User's Answers:**");
   if (countsAgainstLimit && !withinRateLimit()) {
-    const plan = getPlan(selectedPlan);
-    toast(`Daily limit reached — ${getUsage().count}/${planLimitValue()} messages on the ${plan.label} plan. Contact M4sh3r to upgrade.`, "error", 6000);
+    const lim = currentLimit();
+    toast(`Daily limit reached — ${currentUsed()}/${lim === Infinity ? "∞" : lim} messages on the ${planLabel()} plan. Contact M4sh3r to upgrade.`, "error", 6000);
     return;
   }
 
@@ -1149,17 +1203,30 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
       workspaceContext,
       agentMode: currentMode === "agents",
       mode: currentMode,
-      preset: selectedPreset
+      preset: selectedPreset,
+      gatewayUrl: cloud.gatewayUrl,
+      licenseKey: cloud.licenseKey
     });
     if (response && response.ok === false) {
       // Backend reported a failure (e.g. user Stop, auth, timeout). Show it
       // instead of silently leaving an empty bubble.
       stopped = !!response.stopped;
-      finalText = stopped
-        ? (getStreamedText() || "_Stopped._")
-        : `_Request failed: ${response.error || "unknown error"}_`;
+      const err = response.error || "unknown error";
+      if (/^RATE_LIMIT/.test(err)) {
+        // Server rejected for the daily plan cap. Sync the pill to the truth.
+        refreshUsage({ silent: true });
+        finalText = `_Daily limit reached on the **${planLabel()}** plan. Contact M4sh3r to upgrade._`;
+      } else if (/^LICENSE_INVALID/.test(err)) {
+        finalText = `_License key not recognized. Check Settings → Orbit Cloud, or contact M4sh3r._`;
+      } else {
+        finalText = stopped
+          ? (getStreamedText() || "_Stopped._")
+          : `_Request failed: ${err}_`;
+      }
     } else {
       finalText = response?.text || response?.content || "";
+      // Successful billable turn in gateway mode — pull the authoritative count.
+      if (countsAgainstLimit && gatewayActive()) refreshUsage({ silent: true });
     }
   } catch (err) {
     finalText = `_Request failed: ${err?.message || err}_`;
@@ -2334,11 +2401,15 @@ function openSettingsModal() {
         ${PRESETS.map((p) => `<option value="${p.id}">${p.icon} ${escapeHtml(p.label)}</option>`).join("")}
       </select>
     </div>
+    <div class="settings-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px;flex-direction:column;align-items:stretch;gap:8px;">
+      <label style="margin:0;">Orbit Cloud<br><span style="font-size:11px;opacity:.6;">Server URL + license key. Your plan is set by the server — contact M4sh3r to change it.</span></label>
+      <input type="text" id="setCloudUrl" placeholder="https://orbit.yourdomain.com" style="width:100%;">
+      <input type="password" id="setLicenseKey" placeholder="License key" style="width:100%;">
+      <button type="button" id="setActivate" class="modal-btn" style="align-self:flex-start;">Activate / Refresh plan</button>
+    </div>
     <div class="settings-row">
-      <label>Plan<br><span style="font-size:11px;opacity:.6;">Sets your daily message limit · contact M4sh3r to change</span></label>
-      <select id="setPlan">
-        ${PLANS.map((p) => `<option value="${p.id}">${escapeHtml(p.label)} — ${p.dailyLimit === Infinity ? "unlimited" : p.dailyLimit + "/day"}</option>`).join("")}
-      </select>
+      <label>Plan</label>
+      <span id="setPlanLabel" style="font-size:13px;opacity:.85;"></span>
     </div>
     <div class="settings-row">
       <label>Usage today</label>
@@ -2357,24 +2428,32 @@ function openSettingsModal() {
   body.querySelector("#setDefaultModel").value = selectedModel;
   body.querySelector("#setDefaultMode").value = currentMode;
   body.querySelector("#setPreset").value = selectedPreset;
-  body.querySelector("#setPlan").value = selectedPlan;
   body.querySelector("#setAttachShot").checked = attachScreenshot;
 
+  const planLabelEl = body.querySelector("#setPlanLabel");
   const usageEl = body.querySelector("#setUsage");
-  const renderUsageLine = () => {
-    const limit = planLimitValue();
-    const used = getUsage().count;
-    usageEl.textContent = `${used} / ${limit === Infinity ? "∞" : limit} messages`;
+  const renderPlanLines = () => {
+    const limit = currentLimit();
+    planLabelEl.textContent = planLabel() + (gatewayActive() ? "" : " (local)");
+    usageEl.textContent = `${currentUsed()} / ${limit === Infinity ? "∞" : limit} messages`;
   };
-  renderUsageLine();
+  renderPlanLines();
 
-  body.querySelector("#setPlan").addEventListener("change", (e) => {
-    selectedPlan = normalizePlan(e.target.value);
+  // Orbit Cloud (gateway URL + license key → plan/usage authority)
+  const cloudUrl = body.querySelector("#setCloudUrl");
+  const licenseKeyEl = body.querySelector("#setLicenseKey");
+  cloudUrl.value = cloud.gatewayUrl;
+  licenseKeyEl.value = cloud.licenseKey;
+  const saveCloud = () => {
+    cloud = { gatewayUrl: cloudUrl.value.trim(), licenseKey: licenseKeyEl.value.trim() };
     persistState();
-    updatePlanPill();
-    renderUsageLine();
-    const p = getPlan(selectedPlan);
-    toast(`Plan: ${p.label}`, "success", 1800);
+  };
+  cloudUrl.addEventListener("change", saveCloud);
+  licenseKeyEl.addEventListener("change", saveCloud);
+  body.querySelector("#setActivate").addEventListener("click", async () => {
+    saveCloud();
+    await refreshUsage();
+    renderPlanLines();
   });
 
   body.querySelector("#setPreset").addEventListener("change", (e) => {
@@ -2413,12 +2492,15 @@ function openSettingsModal() {
     selectedPreset = DEFAULT_PRESET;
     selectedPlan = DEFAULT_PLAN;
     attachScreenshot = false;
+    // Keep the user's cloud/license config — clearing data shouldn't deactivate
+    // a paid license. Re-verify the plan from the server afterwards.
     setSelectedModel(selectedModel);
     setMode(currentMode);
     updateScreenshotToggleUI();
     updatePlanPill();
     render();
     persistState();
+    refreshUsage({ silent: true });
     close();
     toast("All data cleared", "success");
   });
@@ -2759,3 +2841,5 @@ setupSolarBackground();
 setupCursorGlow();
 render();
 autoResize();
+// If a license is configured, verify the plan + usage with the gateway.
+refreshUsage({ silent: true });
