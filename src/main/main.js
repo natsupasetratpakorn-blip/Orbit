@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, screen, dialog, session, shell, Tray, Menu, globalShortcut, clipboard } from "electron";
-import { mkdir, readFile, writeFile, readdir, stat as statAsync, unlink } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, stat as statAsync, unlink, rename } from "node:fs/promises";
 import { existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -968,6 +968,86 @@ function registerIpc() {
       return { ok: true };
     } catch (error) {
       console.warn(`[Workspace] write failed for ${target.fullPath}: ${error.message}`);
+      return { ok: false, error: error.message };
+    }
+  });
+
+  // Append an entry to the workspace undo timeline. Shared by delete/move so a
+  // destructive op can be reverted from the UI just like a write.
+  async function appendTimeline(root, entry) {
+    try {
+      const tlPath = join(root, ".orbit", "timeline.json");
+      await mkdir(dirname(tlPath), { recursive: true });
+      let timeline = [];
+      try { timeline = JSON.parse(await readFile(tlPath, "utf8")); } catch { timeline = []; }
+      timeline.push({ ts: new Date().toISOString(), agentId: "foreground", ...entry });
+      if (timeline.length > 200) timeline = timeline.slice(-200);
+      await writeFile(tlPath, JSON.stringify(timeline, null, 2), "utf8");
+    } catch (tlErr) {
+      console.warn(`[Workspace] timeline append failed: ${tlErr.message}`);
+    }
+  }
+
+  // Delete a file inside the workspace. Snapshots its prior content to the
+  // timeline first so the deletion can be reverted.
+  ipcMain.handle("workspace:delete-file", async (_event, { workspacePath, relativePath } = {}) => {
+    const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
+    if (!root) return { ok: false, error: "No workspace is open." };
+    let target;
+    try {
+      target = resolveInsideWorkspace(root, relativePath);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    try {
+      let prevContent = null;
+      try { prevContent = await readFile(target.fullPath, "utf8"); } catch { /* binary or missing */ }
+      await unlink(target.fullPath);
+      await appendTimeline(root, { op: "delete_file", path: target.relativePath, existedBefore: true, ...createTimelineSnapshot(target.relativePath, prevContent) });
+      console.log(`[Workspace] deleted ${target.fullPath}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  // Move/rename a file within the workspace. Both endpoints are validated to
+  // stay inside the sandbox.
+  ipcMain.handle("workspace:move-file", async (_event, { workspacePath, from, to } = {}) => {
+    const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
+    if (!root) return { ok: false, error: "No workspace is open." };
+    let src; let dst;
+    try {
+      src = resolveInsideWorkspace(root, from);
+      dst = resolveInsideWorkspace(root, to);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    try {
+      await mkdir(dirname(dst.fullPath), { recursive: true });
+      await rename(src.fullPath, dst.fullPath);
+      await appendTimeline(root, { op: "move_file", path: dst.relativePath, from: src.relativePath, to: dst.relativePath });
+      console.log(`[Workspace] moved ${src.fullPath} -> ${dst.fullPath}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  // Create a directory (recursively) inside the workspace.
+  ipcMain.handle("workspace:create-dir", async (_event, { workspacePath, relativePath } = {}) => {
+    const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
+    if (!root) return { ok: false, error: "No workspace is open." };
+    let target;
+    try {
+      target = resolveInsideWorkspace(root, relativePath);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    try {
+      await mkdir(target.fullPath, { recursive: true });
+      return { ok: true };
+    } catch (error) {
       return { ok: false, error: error.message };
     }
   });

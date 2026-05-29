@@ -74,6 +74,68 @@ describe("parseAIResponse", () => {
       { type: "deploy_agent", task: "Refactor code", content: "some context" }
     ]);
   });
+  it("extracts delete_file tags", () => {
+    expect(parseAIResponse("<delete_file path=\"src/old.js\" />")).toEqual([
+      { type: "delete_file", path: "src/old.js" }
+    ]);
+  });
+
+  it("extracts move_file tags with from/to", () => {
+    expect(parseAIResponse("<move_file from=\"a.js\" to=\"b.js\" />")).toEqual([
+      { type: "move_file", from: "a.js", to: "b.js" }
+    ]);
+  });
+
+  it("extracts create_directory tags", () => {
+    expect(parseAIResponse("<create_directory path=\"src/new\" />")).toEqual([
+      { type: "create_directory", path: "src/new" }
+    ]);
+  });
+
+  it("extracts list_dir tags", () => {
+    expect(parseAIResponse("<list_dir path=\"src/components\" />")).toEqual([
+      { type: "list_dir", path: "src/components" }
+    ]);
+  });
+
+  it("extracts git_status tags", () => {
+    expect(parseAIResponse("<git_status />")).toEqual([
+      { type: "git_status" }
+    ]);
+  });
+
+  it("extracts git_diff tags with and without a path", () => {
+    expect(parseAIResponse("<git_diff />")).toEqual([
+      { type: "git_diff", path: undefined }
+    ]);
+    expect(parseAIResponse("<git_diff path=\"src/app.js\" />")).toEqual([
+      { type: "git_diff", path: "src/app.js" }
+    ]);
+  });
+
+  it("extracts git_log tags with and without a count", () => {
+    expect(parseAIResponse("<git_log />")).toEqual([
+      { type: "git_log", count: undefined }
+    ]);
+    expect(parseAIResponse("<git_log count=\"10\" />")).toEqual([
+      { type: "git_log", count: 10 }
+    ]);
+  });
+
+  it("extracts read_file with a line range into start/end", () => {
+    expect(parseAIResponse("<read_file path=\"src/app.js\" lines=\"40-80\" />")).toEqual([
+      { type: "read_file", path: "src/app.js", start: 40, end: 80 }
+    ]);
+  });
+
+  it("preserves surrounding text around extended tools", () => {
+    const input = "Cleaning up:\n<delete_file path=\"tmp.js\" />\nDone.";
+    expect(parseAIResponse(input)).toEqual([
+      { type: "text", content: "Cleaning up:\n" },
+      { type: "delete_file", path: "tmp.js" },
+      { type: "text", content: "\nDone." }
+    ]);
+  });
 });
 
 describe("renderMarkdown", () => {

@@ -134,6 +134,25 @@ function searchWorkspaceFiles(dir, query, isRegex = false, baseDir = dir) {
   return results;
 }
 
+// Append an entry to the workspace undo timeline (.orbit/timeline.json),
+// mirroring the inline write_file/patch_file logic so destructive filesystem
+// ops (delete/move) are revertable. `entry` should already include any
+// createTimelineSnapshot fields.
+function appendTimeline(entry) {
+  try {
+    const tlPath = path.join(workspaceRoot, ".orbit", "timeline.json");
+    let timeline = [];
+    if (fs.existsSync(tlPath)) {
+      try { timeline = JSON.parse(fs.readFileSync(tlPath, "utf8")); } catch { timeline = []; }
+    }
+    timeline.push({ ts: new Date().toISOString(), agentId, ...entry });
+    if (timeline.length > 200) timeline = timeline.slice(-200);
+    fs.writeFileSync(tlPath, JSON.stringify(timeline, null, 2), "utf8");
+  } catch (tlErr) {
+    log(`(timeline write failed: ${tlErr.message})`);
+  }
+}
+
 // Helper to get GCP token
 let _cachedToken = null;
 let _tokenFetchedAt = 0;
@@ -281,8 +300,9 @@ Multiple SEARCH/REPLACE blocks allowed in one tag. SEARCH must match exactly inc
 COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
 </write_file>
 
-4. Read a file (only if you genuinely need it before patching):
+4. Read a file (only if you genuinely need it before patching). Add a lines="A-B" range to read just part of a large file:
 <read_file path="relative/path/to/file.js" />
+<read_file path="relative/path/to/file.js" lines="40-80" />
 
 5. List all files in the workspace:
 <list_workspace />
@@ -290,6 +310,17 @@ COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
 6. Search workspace files for text pattern or regular expression:
 <search_workspace mode="regex|literal">query</search_workspace>
 (aliases: <grep_workspace>, <find_in_files>)
+
+7. Filesystem operations (sandboxed to the workspace, snapshotted for undo — prefer these over rm/mv/mkdir via execute_command):
+<delete_file path="relative/path/to/file.js" />
+<move_file from="old/path.js" to="new/path.js" />
+<create_directory path="relative/new/dir" />
+
+8. Targeted directory listing and read-only git inspection:
+<list_dir path="src/components" />
+<git_status />
+<git_diff />                    (or <git_diff path="src/app.js" />)
+<git_log count="10" />          (count optional, default 20)
 
 ====== RULES ======
 - Prefer <patch_file> over <write_file> for existing files. Rewriting large files whole risks truncation and data loss.
@@ -508,9 +539,19 @@ COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
             const { fullPath } = resolveInsideWorkspace(workspaceRoot, tool.path);
             log(`Reading file: ${tool.path}`);
             if (fs.existsSync(fullPath)) {
-              const content = fs.readFileSync(fullPath, "utf8");
+              let content = fs.readFileSync(fullPath, "utf8");
+              let rangeNote = "";
+              // Optional line-range slice (1-based, inclusive) to keep large
+              // files from blowing the context budget.
+              if (Number.isFinite(tool.start) && Number.isFinite(tool.end)) {
+                const lines = content.split(/\r?\n/);
+                const start = Math.max(tool.start, 1);
+                const end = Math.min(tool.end, lines.length);
+                content = lines.slice(start - 1, end).join("\n");
+                rangeNote = ` lines="${start}-${end}"`;
+              }
               log(`Read ${content.length} characters`);
-              combinedResults.push(`[TOOL_RESULT: read_file path="${tool.path}"]\n${truncateToolOutput(content)}`);
+              combinedResults.push(`[TOOL_RESULT: read_file path="${tool.path}"${rangeNote}]\n${truncateToolOutput(content)}`);
             } else {
               log(`File does not exist: ${tool.path}`);
               combinedResults.push(`[TOOL_RESULT: read_file path="${tool.path}" (FAILED)]\nFile does not exist.`);
@@ -553,6 +594,76 @@ COMPLETE FILE CONTENT — never use placeholders like "// rest of file"
           } catch (searchErr) {
             log(`Error searching workspace: ${searchErr.message}`);
             combinedResults.push(`[TOOL_RESULT: search_workspace (FAILED)]\nError: ${searchErr.message}`);
+          }
+        } else if (tool.type === "list_dir") {
+          try {
+            const { fullPath } = resolveInsideWorkspace(workspaceRoot, tool.path || ".");
+            log(`Listing directory: ${tool.path}`);
+            const files = listWorkspaceFiles(fullPath);
+            const fileList = truncateToolOutput(files.map(f => `- ${f}`).join("\n")) || "(empty)";
+            combinedResults.push(`[TOOL_RESULT: list_dir path="${tool.path}"]\n${fileList}`);
+          } catch (listErr) {
+            log(`Error listing directory: ${listErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: list_dir path="${tool.path}" (FAILED)]\nError: ${listErr.message}`);
+          }
+        } else if (tool.type === "delete_file") {
+          try {
+            const { fullPath, relativePath } = resolveInsideWorkspace(workspaceRoot, tool.path);
+            log(`Deleting file: ${tool.path}`);
+            if (!fs.existsSync(fullPath)) {
+              throw new Error("File does not exist.");
+            }
+            let prevContent = null;
+            try { prevContent = fs.readFileSync(fullPath, "utf8"); } catch { /* binary — store null */ }
+            fs.unlinkSync(fullPath);
+            appendTimeline({ op: "delete_file", path: relativePath, existedBefore: true, ...createTimelineSnapshot(relativePath, prevContent) });
+            log(`Success deleting ${tool.path}`);
+            combinedResults.push(`[TOOL_RESULT: delete_file path="${tool.path}"]\nDeleted ${tool.path}`);
+          } catch (delErr) {
+            log(`Error deleting file: ${delErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: delete_file path="${tool.path}" (FAILED)]\nError: ${delErr.message}`);
+          }
+        } else if (tool.type === "move_file") {
+          try {
+            const src = resolveInsideWorkspace(workspaceRoot, tool.from);
+            const dst = resolveInsideWorkspace(workspaceRoot, tool.to);
+            log(`Moving file: ${tool.from} -> ${tool.to}`);
+            if (!fs.existsSync(src.fullPath)) {
+              throw new Error("Source file does not exist.");
+            }
+            fs.mkdirSync(path.dirname(dst.fullPath), { recursive: true });
+            fs.renameSync(src.fullPath, dst.fullPath);
+            appendTimeline({ op: "move_file", path: dst.relativePath, from: src.relativePath, to: dst.relativePath });
+            log(`Success moving ${tool.from} -> ${tool.to}`);
+            combinedResults.push(`[TOOL_RESULT: move_file]\nMoved ${tool.from} → ${tool.to}`);
+          } catch (mvErr) {
+            log(`Error moving file: ${mvErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: move_file (FAILED)]\nError: ${mvErr.message}`);
+          }
+        } else if (tool.type === "create_directory") {
+          try {
+            const { fullPath, relativePath } = resolveInsideWorkspace(workspaceRoot, tool.path);
+            log(`Creating directory: ${tool.path}`);
+            fs.mkdirSync(fullPath, { recursive: true });
+            log(`Success creating ${tool.path}`);
+            combinedResults.push(`[TOOL_RESULT: create_directory path="${tool.path}"]\nCreated ${relativePath}`);
+          } catch (mkErr) {
+            log(`Error creating directory: ${mkErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: create_directory path="${tool.path}" (FAILED)]\nError: ${mkErr.message}`);
+          }
+        } else if (tool.type === "git_status" || tool.type === "git_diff" || tool.type === "git_log") {
+          try {
+            const cmd = tool.type === "git_status"
+              ? "git status --porcelain=v1 -b"
+              : tool.type === "git_diff"
+                ? `git --no-pager diff${tool.path ? ` -- "${tool.path}"` : ""}`
+                : `git --no-pager log --oneline -n ${Math.min(Math.max(tool.count || 20, 1), 100)}`;
+            const res = await runInteractiveCommand(cmd, controlFile);
+            const output = [res.stdout, res.stderr].filter(Boolean).join("\n").trim() || "(no output)";
+            combinedResults.push(`[TOOL_RESULT: ${tool.type}]\n${truncateToolOutput(output)}`);
+          } catch (gitErr) {
+            log(`Error running ${tool.type}: ${gitErr.message}`);
+            combinedResults.push(`[TOOL_RESULT: ${tool.type} (FAILED)]\nError: ${gitErr.message}`);
           }
         } else {
           log(`Warning: Unrecognized tool type: ${tool.type}`);

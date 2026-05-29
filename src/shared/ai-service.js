@@ -77,7 +77,19 @@ const AGENT_INSTRUCTIONS =
   "</patch_file>\n" +
   "You can specify multiple SEARCH/REPLACE blocks in a single patch_file tag. The SEARCH block must match the original content exactly, including whitespace.\n\n" +
   "4. To ask to read a file from the workspace, use:\n" +
-  "<read_file path=\"relative/path/to/file.js\" />\n\n" +
+  "<read_file path=\"relative/path/to/file.js\" />\n" +
+  "To read only a precise line range (cheaper than the whole file when you know where to look), add a `lines` attribute:\n" +
+  "<read_file path=\"relative/path/to/file.js\" lines=\"40-80\" />\n\n" +
+  "4b. WRITE & FILESYSTEM TOOLS (sandboxed to the workspace, snapshotted for undo):\n" +
+  "  • Delete a file:        <delete_file path=\"relative/path/to/file.js\" />\n" +
+  "  • Move or rename a file: <move_file from=\"old/path.js\" to=\"new/path.js\" />\n" +
+  "  • Create a directory:   <create_directory path=\"relative/new/dir\" />\n" +
+  "Use these instead of shelling out to `rm`, `mv`, or `mkdir` via <execute_command> — they validate the path stays inside the workspace and record an undoable timeline snapshot.\n\n" +
+  "4c. TARGETED LISTING & READ-ONLY GIT:\n" +
+  "  • List one subdirectory:  <list_dir path=\"src/components\" />\n" +
+  "  • Working-tree status:    <git_status />\n" +
+  "  • Diff (path optional):   <git_diff /> or <git_diff path=\"src/app.js\" />\n" +
+  "  • Recent commits:         <git_log count=\"10\" /> (count optional, default 20)\n\n" +
   "5. To list every file in the workspace (full recursive tree), use:\n" +
   "<list_workspace />\n" +
   "Use this when the user asks vague things like \"what's in this project\", \"explore the codebase\", \"find the X module\", etc. " +
@@ -161,8 +173,16 @@ const READ_ONLY_TOOLS =
   "- To grep the workspace for a symbol, string, or regex:\n" +
   "  <search_workspace>EXACT_STRING</search_workspace>\n" +
   "  (or `<search_workspace mode=\"regex\">PATTERN</search_workspace>`)\n" +
-  "- To read a specific file:\n" +
+  "- To read a specific file (optionally a precise line range to save tokens):\n" +
   "  <read_file path=\"relative/path/to/file.js\" />\n" +
+  "  <read_file path=\"relative/path/to/file.js\" lines=\"40-80\" />\n" +
+  "- To list the contents of a specific subdirectory (instead of the whole tree):\n" +
+  "  <list_dir path=\"src/components\" />\n" +
+  "- To inspect version control state (read-only git):\n" +
+  "  <git_status />                       // working-tree status + branch\n" +
+  "  <git_diff />                         // unstaged diff for the whole workspace\n" +
+  "  <git_diff path=\"src/app.js\" />       // diff for one file (path optional)\n" +
+  "  <git_log count=\"10\" />               // recent commits (count optional, default 20)\n" +
   "- To list every application window currently open on the user's desktop:\n" +
   "  <list_windows />\n" +
   "- To type text into a specific window on the user's desktop, or the active window (highly recommended when the user asks you to type, write, or enter text into external apps like Discord, browser fields, etc.):\n" +

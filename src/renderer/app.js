@@ -616,21 +616,48 @@ async function startRecording() {
 
           const time = Date.now() * 0.0035;
 
-          // We draw 3 beautiful, overlapping monochrome wave layers with organic flow
-          // Layer 1: Soft backdrop (deep silver)
-          drawSiriLikeWave(ctx, w, h, volume, time, 0.95, 0.40, "rgba(255, 255, 255, 0.12)", 1.0);
-          
-          // Layer 2: Middle layer (bright silver)
-          drawSiriLikeWave(ctx, w, h, volume, time * -1.15, 1.45, 0.65, "rgba(255, 255, 255, 0.40)", 1.0);
+          // Build a horizontal gradient once per frame so each wave layer picks
+          // up a cool silver→blue→silver shimmer instead of flat white.
+          const grad = ctx.createLinearGradient(0, 0, w, 0);
+          grad.addColorStop(0.0, "rgba(180, 200, 255, 0.0)");
+          grad.addColorStop(0.2, "rgba(190, 210, 255, 0.9)");
+          grad.addColorStop(0.5, "rgba(255, 255, 255, 0.95)");
+          grad.addColorStop(0.8, "rgba(170, 200, 255, 0.9)");
+          grad.addColorStop(1.0, "rgba(180, 200, 255, 0.0)");
 
-          // Layer 3: Sharp foreground (crisp white)
-          drawSiriLikeWave(ctx, w, h, volume, time * 1.45, 2.1, 0.95, "rgba(255, 255, 255, 0.85)", 1.5);
+          // We draw 3 beautiful, overlapping wave layers with organic flow.
+          // Layer 1: Soft backdrop (deep silver)
+          drawSiriLikeWave(ctx, w, h, volume, time, 0.95, 0.40, "rgba(170, 200, 255, 0.14)", 1.0, 0);
+
+          // Layer 2: Middle layer (cool gradient)
+          drawSiriLikeWave(ctx, w, h, volume, time * -1.15, 1.45, 0.65, grad, 1.2, 4);
+
+          // Layer 3: Sharp foreground (crisp gradient with glow)
+          drawSiriLikeWave(ctx, w, h, volume, time * 1.45, 2.1, 0.95, grad, 1.6, 7);
+
+          // Center pulse dot — a soft glowing core that breathes with the voice.
+          // Capped to the canvas half-height so it never clips on the short bar.
+          const pr = Math.min(h / 2 - 0.5, 1.2 + volume * 6);
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(220, 230, 255, 0.9)";
+          ctx.shadowColor = "rgba(150, 190, 255, 0.9)";
+          ctx.shadowBlur = 8 + volume * 14;
+          ctx.arc(w / 2, h / 2, pr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
         }
 
-        function drawSiriLikeWave(ctx, w, h, volume, timeShift, freqScale, ampScale, strokeStyle, lineWidth) {
+        function drawSiriLikeWave(ctx, w, h, volume, timeShift, freqScale, ampScale, strokeStyle, lineWidth, glow) {
           ctx.beginPath();
           ctx.lineWidth = lineWidth;
           ctx.strokeStyle = strokeStyle;
+          ctx.lineCap = "round";
+          if (glow) {
+            ctx.shadowColor = "rgba(150, 190, 255, 0.85)";
+            ctx.shadowBlur = glow;
+          } else {
+            ctx.shadowBlur = 0;
+          }
 
           const sliceWidth = w / bufferLength;
           let x = 0;
@@ -656,6 +683,7 @@ async function startRecording() {
             x += sliceWidth;
           }
           ctx.stroke();
+          ctx.shadowBlur = 0;
         }
 
         startVisualizer = drawVisuals;
@@ -1249,6 +1277,11 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "list" :
     part.type === "wait_ms" ? "read" :
     part.type === "open_browser" ? "browser" :
+    part.type === "delete_file" ? "write" :
+    part.type === "move_file" ? "write" :
+    part.type === "create_directory" ? "write" :
+    part.type === "list_dir" ? "list" :
+    part.type === "git_status" || part.type === "git_diff" || part.type === "git_log" ? "command" :
     part.type === "deploy_agent" ? "agent" : "read";
   const typeLabel =
     part.type === "execute_command" ? "Command" :
@@ -1262,7 +1295,15 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "Focus Window" :
     part.type === "wait_ms" ? "Wait" :
     part.type === "open_browser" ? "Open Browser" :
-    part.type === "deploy_agent" ? "Deploy Agent" : "Read File";
+    part.type === "list_dir" ? "List Directory" :
+    part.type === "delete_file" ? "Delete File" :
+    part.type === "move_file" ? "Move File" :
+    part.type === "create_directory" ? "Create Folder" :
+    part.type === "git_status" ? "Git Status" :
+    part.type === "git_diff" ? "Git Diff" :
+    part.type === "git_log" ? "Git Log" :
+    part.type === "deploy_agent" ? "Deploy Agent" :
+    part.type === "read_file" && part.start != null ? `Read File :${part.start}-${part.end}` : "Read File";
 
   const typeSpan = document.createElement("span");
   typeSpan.className = `action-card-type ${typeClass}`;
@@ -1278,7 +1319,11 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "wait_ms" ? `${part.ms}ms` :
     part.type === "open_browser" ? part.url :
     part.type === "list_windows" ? "Active Application Windows" :
-    part.type === "deploy_agent" ? "Autonomous Background Agent" : (part.path || "");
+    part.type === "deploy_agent" ? "Autonomous Background Agent" :
+    part.type === "move_file" ? `${part.from} → ${part.to}` :
+    part.type === "git_status" ? "working tree" :
+    part.type === "git_log" ? `last ${part.count || 20} commits` :
+    part.type === "git_diff" ? (part.path || "all changes") : (part.path || "");
 
   header.append(typeSpan, pathSpan);
 
@@ -1959,13 +2004,93 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
     });
 
     if (res && res.ok) {
-      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", fileContent: res.content };
-      toolResult =
-        `[TOOL_RESULT] read_file: ${part.path}\n` +
-        `--- FILE CONTENT START ---\n${res.content}\n--- FILE CONTENT END ---`;
+      if (part.start != null && part.end != null) {
+        // Precise line-range read — slice the requested 1-indexed range and
+        // number each line so the model can cite path:line accurately.
+        const lines = String(res.content).split(/\r?\n/);
+        const start = Math.max(1, part.start);
+        const end = Math.min(lines.length, part.end);
+        const slice = lines.slice(start - 1, end).map((l, i) => `${start + i}\t${l}`).join("\n");
+        cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", fileContent: slice };
+        toolResult =
+          `[TOOL_RESULT] read_file: ${part.path} (lines ${start}-${end})\n` +
+          `--- FILE CONTENT START ---\n${slice}\n--- FILE CONTENT END ---`;
+      } else {
+        cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", fileContent: res.content };
+        toolResult =
+          `[TOOL_RESULT] read_file: ${part.path}\n` +
+          `--- FILE CONTENT START ---\n${res.content}\n--- FILE CONTENT END ---`;
+      }
     } else {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Read failed" };
       toolResult = `[TOOL_RESULT] read_file FAILED: ${part.path} — ${res?.error || "Read failed"}`;
+    }
+  } else if (part.type === "list_dir") {
+    try {
+      const info = await window.orbit.getWorkspaceInfo(workspacePath);
+      if (info && !info.error) {
+        const prefix = (part.path || "").replace(/^[./]+|\/+$/g, "");
+        const all = (info.files || []).map((f) => (typeof f === "string" ? f : f.path));
+        const inDir = prefix ? all.filter((p) => p === prefix || p.startsWith(prefix + "/")) : all;
+        const depth = prefix ? prefix.split("/").length : 0;
+        const children = new Set();
+        for (const p of inDir) {
+          const segs = p.split("/");
+          if (segs.length > depth + 1) children.add(segs.slice(0, depth + 1).join("/") + "/");
+          else children.add(p);
+        }
+        const list = Array.from(children).sort();
+        cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", fileList: list };
+        toolResult = `[TOOL_RESULT] list_dir: ${part.path}\n${list.length ? list.map((c) => `- ${c}`).join("\n") : "(empty or no such directory)"}`;
+      } else {
+        cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: info?.error || "Workspace not available" };
+        toolResult = `[TOOL_RESULT] list_dir FAILED: ${info?.error || "No workspace open"}`;
+      }
+    } catch (e) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: e?.message || String(e) };
+      toolResult = `[TOOL_RESULT] list_dir FAILED: ${e?.message || e}`;
+    }
+  } else if (part.type === "delete_file") {
+    const res = await window.orbit.deleteWorkspaceFile({ workspacePath, relativePath: part.path });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] delete_file: deleted ${part.path}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "delete failed" };
+      toolResult = `[TOOL_RESULT] delete_file FAILED: ${part.path} — ${res?.error || "delete failed"}`;
+    }
+  } else if (part.type === "move_file") {
+    const res = await window.orbit.moveWorkspaceFile({ workspacePath, from: part.from, to: part.to });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] move_file: ${part.from} → ${part.to}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "move failed" };
+      toolResult = `[TOOL_RESULT] move_file FAILED: ${part.from} → ${part.to} — ${res?.error || "move failed"}`;
+    }
+  } else if (part.type === "create_directory") {
+    const res = await window.orbit.createWorkspaceDir({ workspacePath, relativePath: part.path });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] create_directory: created ${part.path}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "mkdir failed" };
+      toolResult = `[TOOL_RESULT] create_directory FAILED: ${part.path} — ${res?.error || "mkdir failed"}`;
+    }
+  } else if (part.type === "git_status" || part.type === "git_diff" || part.type === "git_log") {
+    const cmd = part.type === "git_status"
+      ? "git status --porcelain=v1 -b"
+      : part.type === "git_diff"
+        ? `git --no-pager diff${part.path ? ` -- "${part.path}"` : ""}`
+        : `git --no-pager log --oneline -n ${Math.min(Math.max(part.count || 20, 1), 100)}`;
+    const res = await window.orbit.runWorkspaceCommand({ workspacePath, command: cmd });
+    const out = `${(res?.stdout || "").trim()}${res?.stderr ? "\n--- stderr ---\n" + res.stderr.trim() : ""}`.trim() || "(no output)";
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", output: out };
+      toolResult = `[TOOL_RESULT] ${part.type}:\n${out}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || out };
+      toolResult = `[TOOL_RESULT] ${part.type} FAILED: ${res?.error || out}`;
     }
   } else if (part.type === "list_workspace") {
     try {

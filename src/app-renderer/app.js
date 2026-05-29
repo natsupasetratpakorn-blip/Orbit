@@ -80,6 +80,12 @@ let micAnalyser = null;
 let micVisualizerRAF = null;
 let streaming = false;
 let streamingMessageId = null;
+let currentStreamId = null; // active AI stream id, used to abort/stop mid-stream
+// Autonomous tool loop guard. Each fresh user turn resets the counter; the
+// auto-fire → tool → AI → re-render loop increments it and stops at the cap so
+// a model that keeps emitting tools can't run forever (and burn cost).
+let agentStepsThisTurn = 0;
+const MAX_AGENT_STEPS = 12;
 
 function loadState() {
   try {
@@ -306,11 +312,15 @@ function renderUserBody(message, container) {
 // Per-(message, partIndex) execution state for action cards. Survives
 // re-renders so a card doesn't re-run every time the list refreshes.
 const cardExecutionStates = {};
-const READ_ONLY_TOOL_TYPES = new Set(["read_file", "list_workspace", "list_windows", "search_workspace"]);
+const READ_ONLY_TOOL_TYPES = new Set([
+  "read_file", "list_workspace", "list_windows", "search_workspace",
+  "list_dir", "git_status", "git_diff", "git_log"
+]);
 const AUTO_RUN_IN_AGENT_MODE = new Set([
   "execute_command", "write_file", "patch_file",
   "type_text", "click_pixel", "scroll", "keystroke", "focus_window", "wait_ms",
-  "open_browser", "deploy_agent"
+  "open_browser", "deploy_agent",
+  "delete_file", "move_file", "create_directory"
 ]);
 
 
@@ -511,12 +521,27 @@ function maybeAutoFireTools() {
     const parts = parseAIResponse(msg.content || "");
     let partIdx = 0;
     for (const part of parts) {
-      if (part.type === "text") continue;
+      // Mirror renderAssistantBody's indexing exactly so cardKeys match: text
+      // and ask_user_questions parts don't consume a partIdx.
+      if (part.type === "text" || part.type === "ask_user_questions") continue;
       const cardKey = `${msg.id}-${part.type}-${partIdx}`;
+      partIdx++;
       const cardState = cardExecutionStates[cardKey];
       const canAuto = READ_ONLY_TOOL_TYPES.has(part.type)
         || (currentMode === "agents" && AUTO_RUN_IN_AGENT_MODE.has(part.type));
       if (!cardState && canAuto) {
+        // Runaway guard: the auto-fire → tool → AI → re-render → auto-fire loop
+        // has no natural end if the model keeps emitting tools. Cap it so it
+        // can't loop forever. The counter resets on each fresh user message.
+        if (agentStepsThisTurn >= MAX_AGENT_STEPS) {
+          cardExecutionStates[cardKey] = {
+            status: "error",
+            error: `Auto-run paused after ${MAX_AGENT_STEPS} steps. Click Run to continue this tool, or send a new message.`
+          };
+          render();
+          return;
+        }
+        agentStepsThisTurn += 1;
         cardExecutionStates[cardKey] = { status: "running" };
         executeToolPart(part, cardKey, msg.id).catch(() => {});
         return; // one at a time
@@ -541,7 +566,14 @@ const TOOL_LABEL = {
   focus_window: "Focus window",
   wait_ms: "Wait",
   open_browser: "Open browser",
-  deploy_agent: "Deploy agent"
+  deploy_agent: "Deploy agent",
+  list_dir: "List directory",
+  delete_file: "Delete file",
+  move_file: "Move file",
+  create_directory: "Create folder",
+  git_status: "Git status",
+  git_diff: "Git diff",
+  git_log: "Git log"
 };
 
 function renderActionCard(part, cardKey) {
@@ -553,7 +585,9 @@ function renderActionCard(part, cardKey) {
   const head = document.createElement("div");
   head.className = "action-card-head";
   const label = TOOL_LABEL[part.type] || part.type;
-  const subtitle = part.path ? part.path
+  const subtitle = part.type === "move_file" ? `${part.from} → ${part.to}`
+    : part.type === "read_file" && part.start != null ? `${part.path} :${part.start}-${part.end}`
+    : part.path ? part.path
     : part.window ? `→ ${part.window}`
     : part.url ? part.url
     : part.type === "click_pixel" || part.type === "scroll" ? `x=${part.x}, y=${part.y}${part.ticks != null ? `, ticks=${part.ticks}` : ""}`
@@ -634,7 +668,7 @@ async function executeToolPart(part, cardKey, messageId) {
       }
       case "write_file": {
         if (!workspacePath) { ok = false; output = "No project folder set."; break; }
-        const res = await window.orbit.writeWorkspaceFile({ workspacePath, path: part.path, content: part.content || "" });
+        const res = await window.orbit.writeWorkspaceFile({ workspacePath, relativePath: part.path, content: part.content || "" });
         ok = !!res?.ok;
         output = ok ? `Wrote ${part.path}` : (res?.error || "Write failed");
         toolResult = `[TOOL_RESULT: write_file path="${part.path}"]\n${output}`;
@@ -643,13 +677,13 @@ async function executeToolPart(part, cardKey, messageId) {
       case "patch_file": {
         // No dedicated patch IPC in this app yet — fall back to read+apply+write.
         if (!workspacePath) { ok = false; output = "No project folder set."; break; }
-        const read = await window.orbit.readWorkspaceFile({ workspacePath, path: part.path });
+        const read = await window.orbit.readWorkspaceFile({ workspacePath, relativePath: part.path });
         if (!read?.ok) { ok = false; output = `Read failed: ${read?.error || "unknown"}`; toolResult = `[TOOL_RESULT: patch_file path="${part.path}" FAILED] ${output}`; break; }
         const { applySearchReplacePatches } = await import("../shared/parser.js");
         let next;
         try { next = applySearchReplacePatches(read.content, part.content || ""); }
         catch (e) { ok = false; output = `Patch failed: ${e.message}`; toolResult = `[TOOL_RESULT: patch_file path="${part.path}" FAILED] ${output}`; break; }
-        const write = await window.orbit.writeWorkspaceFile({ workspacePath, path: part.path, content: next });
+        const write = await window.orbit.writeWorkspaceFile({ workspacePath, relativePath: part.path, content: next });
         ok = !!write?.ok;
         output = ok ? `Patched ${part.path}` : (write?.error || "Write failed");
         toolResult = `[TOOL_RESULT: patch_file path="${part.path}"]\n${output}`;
@@ -657,10 +691,85 @@ async function executeToolPart(part, cardKey, messageId) {
       }
       case "read_file": {
         if (!workspacePath) { ok = false; output = "No project folder set."; break; }
-        const res = await window.orbit.readWorkspaceFile({ workspacePath, path: part.path });
+        const res = await window.orbit.readWorkspaceFile({ workspacePath, relativePath: part.path });
         ok = !!res?.ok;
-        output = ok ? res.content : (res?.error || "Read failed");
-        toolResult = `[TOOL_RESULT: read_file path="${part.path}"]\n${truncateForAI(output)}`;
+        if (ok && part.start != null && part.end != null) {
+          // Precise line-range read: slice the requested 1-indexed range and
+          // prefix each line with its number so the model can cite path:line.
+          const lines = String(res.content).split(/\r?\n/);
+          const start = Math.max(1, part.start);
+          const end = Math.min(lines.length, part.end);
+          output = lines.slice(start - 1, end).map((l, i) => `${start + i}\t${l}`).join("\n");
+          toolResult = `[TOOL_RESULT: read_file path="${part.path}" lines=${start}-${end}]\n${truncateForAI(output)}`;
+        } else {
+          output = ok ? res.content : (res?.error || "Read failed");
+          toolResult = `[TOOL_RESULT: read_file path="${part.path}"]\n${truncateForAI(output)}`;
+        }
+        break;
+      }
+      case "list_dir": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.getWorkspaceInfo(workspacePath);
+        if (res && res.ok !== false) {
+          ok = true;
+          const prefix = (part.path || "").replace(/^[./]+|\/+$/g, "");
+          const all = (res.files || []).map((f) => (typeof f === "string" ? f : f.path));
+          const inDir = prefix
+            ? all.filter((p) => p === prefix || p.startsWith(prefix + "/"))
+            : all;
+          // Collapse to the immediate children (files + subfolders) of the dir.
+          const depth = prefix ? prefix.split("/").length : 0;
+          const children = new Set();
+          for (const p of inDir) {
+            const segs = p.split("/");
+            if (segs.length > depth + 1) children.add(segs.slice(0, depth + 1).join("/") + "/");
+            else children.add(p);
+          }
+          const list = Array.from(children).sort();
+          output = list.length ? list.map((c) => `- ${c}`).join("\n") : "(empty or no such directory)";
+        } else {
+          ok = false; output = res?.error || "list_dir failed";
+        }
+        toolResult = `[TOOL_RESULT: list_dir path="${part.path}"]\n${output}`;
+        break;
+      }
+      case "delete_file": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.deleteWorkspaceFile({ workspacePath, relativePath: part.path });
+        ok = !!res?.ok;
+        output = ok ? `Deleted ${part.path}` : (res?.error || "delete failed");
+        toolResult = `[TOOL_RESULT: delete_file path="${part.path}"]\n${output}`;
+        break;
+      }
+      case "move_file": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.moveWorkspaceFile({ workspacePath, from: part.from, to: part.to });
+        ok = !!res?.ok;
+        output = ok ? `Moved ${part.from} → ${part.to}` : (res?.error || "move failed");
+        toolResult = `[TOOL_RESULT: move_file]\n${output}`;
+        break;
+      }
+      case "create_directory": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const res = await window.orbit.createWorkspaceDir({ workspacePath, relativePath: part.path });
+        ok = !!res?.ok;
+        output = ok ? `Created ${part.path}` : (res?.error || "mkdir failed");
+        toolResult = `[TOOL_RESULT: create_directory path="${part.path}"]\n${output}`;
+        break;
+      }
+      case "git_status":
+      case "git_diff":
+      case "git_log": {
+        if (!workspacePath) { ok = false; output = "No project folder set."; break; }
+        const cmd = part.type === "git_status"
+          ? "git status --porcelain=v1 -b"
+          : part.type === "git_diff"
+            ? `git --no-pager diff${part.path ? ` -- "${part.path}"` : ""}`
+            : `git --no-pager log --oneline -n ${Math.min(Math.max(part.count || 20, 1), 100)}`;
+        const res = await window.orbit.runWorkspaceCommand({ workspacePath, command: cmd });
+        ok = !!res?.ok;
+        output = `${(res?.stdout || "").trim()}${res?.stderr ? "\n--- stderr ---\n" + res.stderr.trim() : ""}`.trim() || "(no output)";
+        toolResult = `[TOOL_RESULT: ${part.type}]\n${truncateForAI(output)}`;
         break;
       }
       case "list_workspace": {
@@ -669,7 +778,7 @@ async function executeToolPart(part, cardKey, messageId) {
         if (res && res.ok !== false) {
           const files = res.files || [];
           ok = true;
-          output = files.slice(0, 250).map((f) => `- ${f}`).join("\n") + (files.length > 250 ? `\n…and ${files.length - 250} more` : "");
+          output = files.slice(0, 250).map((f) => `- ${typeof f === "string" ? f : f.path}`).join("\n") + (files.length > 250 ? `\n…and ${files.length - 250} more` : "");
         } else {
           ok = false; output = res?.error || "list_workspace failed";
         }
@@ -678,10 +787,10 @@ async function executeToolPart(part, cardKey, messageId) {
       }
       case "search_workspace": {
         if (!workspacePath) { ok = false; output = "No project folder set."; break; }
-        const res = await window.orbit.searchWorkspace({ workspacePath, query: part.query, mode: part.mode || "literal" });
+        const res = await window.orbit.searchWorkspace({ workspacePath, query: part.query, isRegex: part.mode === "regex" });
         ok = !!res?.ok;
         output = ok
-          ? (res.matches || []).map((m) => `${m.path}:${m.line}: ${m.text}`).join("\n") || "(no matches)"
+          ? (res.results || []).map((m) => `${m.path}:${m.line}: ${m.text}`).join("\n") || "(no matches)"
           : (res?.error || "search failed");
         toolResult = `[TOOL_RESULT: search_workspace]\n${truncateForAI(output)}`;
         break;
@@ -839,6 +948,10 @@ async function sendMessage(rawText) {
     }
   }
 
+  // Fresh user turn — reset the autonomous tool-loop counter so the agent
+  // loop can run again from zero for this request.
+  agentStepsThisTurn = 0;
+
   const attachmentsSnapshot = attachedFiles.slice();
   const userMessage = {
     id: crypto.randomUUID(),
@@ -864,13 +977,39 @@ async function sendMessage(rawText) {
 // streaming assistant placeholder, stream chunks in, and finalize. Used
 // both by sendMessage and by tool-result follow-ups (which pass `null`
 // attachments).
+// Build a compact workspace context for the AI: path, file count, and the
+// top-level entries. The main process expects `workspaceContext` (not a raw
+// path), and ai-service uses this to tell the model which folder is open.
+async function buildWorkspaceContext(workspacePath) {
+  if (!workspacePath) return null;
+  try {
+    const info = await window.orbit?.getWorkspaceInfo?.(workspacePath);
+    const files = (info?.files || []).map((f) => (typeof f === "string" ? f : f.path)).filter(Boolean);
+    const topLevel = new Set();
+    for (const f of files) {
+      const head = f.split("/")[0];
+      if (head) topLevel.add(head);
+    }
+    return {
+      path: info?.path || workspacePath,
+      fileCount: files.length,
+      topLevel: Array.from(topLevel).slice(0, 40).sort(),
+      files: files.slice(0, 250)
+    };
+  } catch {
+    return { path: workspacePath, fileCount: 0, topLevel: [] };
+  }
+}
+
 async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   if (streaming) return;
   streaming = true;
-  sendButton.disabled = true;
+  sendButton.disabled = false; // keep enabled so it can act as a Stop button
   sendButton.classList.add("is-streaming");
+  sendButton.title = "Stop";
 
   const streamId = crypto.randomUUID();
+  currentStreamId = streamId;
   streamingMessageId = crypto.randomUUID();
   state = addMessageToActiveChat(state, {
     id: streamingMessageId,
@@ -886,7 +1025,7 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   if (window.orbit?.onAIChunk) {
     chunkOff = window.orbit.onAIChunk((data) => {
       if (!data || data.streamId !== streamId) return;
-      if (typeof data.delta === "string" && data.delta) appendStreamingDelta(data.delta);
+      if (typeof data.text === "string" && data.text) appendStreamingDelta(data.text);
     });
   }
 
@@ -902,19 +1041,30 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   const cleanMessages = activeChat.messages.filter((m) => !m.streaming);
 
   let finalText = "";
+  let stopped = false;
   try {
     const activeProject = getActiveProject(state);
+    const workspaceContext = await buildWorkspaceContext(activeProject?.workspacePath || "");
     const response = await window.orbit?.sendToAI?.({
       streamId,
       model: selectedModel,
       messages: cleanMessages,
       screenshotPath,
       attachments: attachmentsForThisTurn.map((a) => a.path),
-      workspacePath: activeProject?.workspacePath || "",
+      workspaceContext,
       agentMode: currentMode === "agents",
       mode: currentMode
     });
-    finalText = response?.text || response?.content || "";
+    if (response && response.ok === false) {
+      // Backend reported a failure (e.g. user Stop, auth, timeout). Show it
+      // instead of silently leaving an empty bubble.
+      stopped = !!response.stopped;
+      finalText = stopped
+        ? (getStreamedText() || "_Stopped._")
+        : `_Request failed: ${response.error || "unknown error"}_`;
+    } else {
+      finalText = response?.text || response?.content || "";
+    }
   } catch (err) {
     finalText = `_Request failed: ${err?.message || err}_`;
   } finally {
@@ -940,10 +1090,20 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   };
   streamingMessageId = null;
   streaming = false;
+  currentStreamId = null;
   sendButton.disabled = false;
   sendButton.classList.remove("is-streaming");
+  sendButton.title = "Send";
   render();
   persistState();
+}
+
+// Read whatever text already streamed into the in-flight assistant bubble so a
+// stopped response can keep the partial content instead of discarding it.
+function getStreamedText() {
+  const chat = getActiveChat(state);
+  const msg = chat?.messages.find((m) => m.id === streamingMessageId);
+  return (msg?.content || "").trim();
 }
 
 function decorateStreamingMessage() {
@@ -1432,22 +1592,57 @@ function drawMicViz() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const data = new Uint8Array(micAnalyser.frequencyBinCount);
 
+  // Render a fixed number of clean, center-mirrored bars rather than one per
+  // FFT bin. Each visual bar averages a slice of the spectrum, and its height
+  // is eased toward the target frame-to-frame for a smooth, liquid motion.
+  const BAR_COUNT = 14;
+  const levels = new Array(BAR_COUNT).fill(0);
+  const usableBins = Math.floor(data.length * 0.7); // ignore the highest, mostly-empty bins
+
   const step = () => {
     if (!micAnalyser) return;
     micAnalyser.getByteFrequencyData(data);
     const W = rect.width, H = rect.height;
+    const mid = H / 2;
     ctx.clearRect(0, 0, W, H);
-    const bars = data.length;
+
     const gap = 2;
-    const bw = (W - gap * (bars - 1)) / bars;
-    for (let i = 0; i < bars; i++) {
-      const v = data[i] / 255;
-      const h = Math.max(2, v * H * 0.95);
-      ctx.fillStyle = `rgba(255,255,255,${0.35 + v * 0.5})`;
+    const bw = (W - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+    const radius = Math.min(bw / 2, 2.5);
+    const binsPerBar = Math.max(1, Math.floor(usableBins / BAR_COUNT));
+
+    for (let i = 0; i < BAR_COUNT; i++) {
+      let sum = 0;
+      for (let b = 0; b < binsPerBar; b++) sum += data[i * binsPerBar + b] || 0;
+      const target = (sum / binsPerBar) / 255;
+      // Ease toward target: fast attack, slower release feels natural.
+      const ease = target > levels[i] ? 0.5 : 0.18;
+      levels[i] += (target - levels[i]) * ease;
+
+      const v = levels[i];
+      const h = Math.max(2.5, v * (H - 4));
       const x = i * (bw + gap);
-      const y = (H - h) / 2;
-      ctx.fillRect(x, y, bw, h);
+      const y = mid - h / 2;
+
+      const grad = ctx.createLinearGradient(0, y, 0, y + h);
+      grad.addColorStop(0, `rgba(150, 190, 255, ${0.55 + v * 0.45})`);
+      grad.addColorStop(1, `rgba(255, 255, 255, ${0.45 + v * 0.45})`);
+      ctx.fillStyle = grad;
+      ctx.shadowColor = "rgba(140, 180, 255, 0.55)";
+      ctx.shadowBlur = 4 + v * 6;
+
+      // Rounded-rect bar (mirrored around the vertical center).
+      const r = Math.min(radius, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + bw, y, x + bw, y + h, r);
+      ctx.arcTo(x + bw, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + bw, y, r);
+      ctx.closePath();
+      ctx.fill();
     }
+    ctx.shadowBlur = 0;
     micVisualizerRAF = requestAnimationFrame(step);
   };
   step();
@@ -2109,11 +2304,13 @@ function render() {
   setTimeout(maybeAutoFireTools, 0);
 }
 
-// Esc closes the topmost modal so users don't get stuck.
+// Esc closes the topmost modal so users don't get stuck. If no modal is open
+// but a response is streaming, Esc stops it.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const modal = document.querySelector(".modal-backdrop");
-  if (modal) { modal.remove(); e.preventDefault(); }
+  if (modal) { modal.remove(); e.preventDefault(); return; }
+  if (streaming) { stopStreaming(); e.preventDefault(); }
 });
 
 // ─── Event wiring ───────────────────────────────────────────────────────
@@ -2143,8 +2340,30 @@ document.addEventListener("click", () => {
   if (menuDropdown && !menuDropdown.hidden) menuDropdown.hidden = true;
 });
 
+// Abort the in-flight AI stream. Used by the Stop button (the Send button
+// while streaming) and the Esc key. The backend resolves the pending
+// sendToAI with { ok:false, stopped:true }, which triggerAITurn turns into a
+// "Stopped." bubble (keeping any partial text that already streamed in).
+async function stopStreaming() {
+  if (!streaming || !currentStreamId) return;
+  // Halt the autonomous tool loop so a stop also breaks the agent chain.
+  agentStepsThisTurn = MAX_AGENT_STEPS;
+  try { await window.orbit?.abortAI?.(currentStreamId); } catch { /* ignore */ }
+}
+
+// Intercept the Send button while streaming so it acts as Stop. Runs before
+// the form's submit handler because the click bubbles first.
+sendButton.addEventListener("click", (event) => {
+  if (streaming) {
+    event.preventDefault();
+    event.stopPropagation();
+    stopStreaming();
+  }
+});
+
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (streaming) { stopStreaming(); return; }
   await sendMessage(promptInput.value);
 });
 

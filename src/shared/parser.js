@@ -130,7 +130,83 @@ export function parseAIResponse(content) {
     parts.push({ type: "text", content });
   }
 
-  return parts;
+  // Second pass: expand any text parts that contain the newer coding tools.
+  // These tags are intentionally kept out of the monolithic regex above so
+  // adding them can't shift its positional capture groups. Each text segment
+  // is re-scanned and split into text + tool parts, preserving order.
+  const expanded = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      for (const sub of parseExtendedTools(part.content)) expanded.push(sub);
+    } else {
+      expanded.push(part);
+    }
+  }
+  return expanded;
+}
+
+// Matches the extended coding toolset. Named capture groups let us identify
+// which tag fired without juggling positional indices. Tags that take no
+// attributes wrap their own name in a group so we can detect a hit.
+const EXTENDED_TOOLS_RE = new RegExp(
+  [
+    // <read_file path="..." lines="10-40" /> — precise line-range read
+    `<(?:read_file|open_file)\\s+path="(?<rf_path>[^"]+)"\\s+lines="(?<rf_start>\\d+)-(?<rf_end>\\d+)"\\s*/>`,
+    // <list_dir path="..." /> (alias list_directory) — targeted listing
+    `<(?:list_dir|list_directory)\\s+path="(?<ls_path>[^"]+)"\\s*/>`,
+    // <delete_file path="..." /> (alias remove_file)
+    `<(?:delete_file|remove_file)\\s+path="(?<del_path>[^"]+)"\\s*/>`,
+    // <create_directory path="..." /> (aliases make_dir, mkdir)
+    `<(?:create_directory|make_dir|mkdir)\\s+path="(?<mkdir_path>[^"]+)"\\s*/>`,
+    // <move_file from="..." to="..." /> (alias rename_file)
+    `<(?:move_file|rename_file)\\s+from="(?<mv_from>[^"]+)"\\s+to="(?<mv_to>[^"]+)"\\s*/>`,
+    // <git_status />
+    `<(?<git_status>git_status)\\s*/>`,
+    // <git_diff /> or <git_diff path="..." />
+    `<(?<git_diff>git_diff)(?:\\s+path="(?<gd_path>[^"]+)")?\\s*/>`,
+    // <git_log /> or <git_log count="N" />
+    `<(?<git_log>git_log)(?:\\s+count="(?<gl_count>\\d+)")?\\s*/>`
+  ].join("|"),
+  "gs"
+);
+
+export function parseExtendedTools(text) {
+  if (!text) return [];
+  const out = [];
+  let lastIndex = 0;
+  let match;
+  EXTENDED_TOOLS_RE.lastIndex = 0;
+  while ((match = EXTENDED_TOOLS_RE.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before.trim()) out.push({ type: "text", content: before });
+    const g = match.groups || {};
+    if (g.rf_path) {
+      out.push({ type: "read_file", path: g.rf_path, start: parseInt(g.rf_start, 10), end: parseInt(g.rf_end, 10) });
+    } else if (g.ls_path) {
+      out.push({ type: "list_dir", path: g.ls_path });
+    } else if (g.del_path) {
+      out.push({ type: "delete_file", path: g.del_path });
+    } else if (g.mkdir_path) {
+      out.push({ type: "create_directory", path: g.mkdir_path });
+    } else if (g.mv_from) {
+      out.push({ type: "move_file", from: g.mv_from, to: g.mv_to });
+    } else if (g.git_status) {
+      out.push({ type: "git_status" });
+    } else if (g.git_diff) {
+      out.push({ type: "git_diff", path: g.gd_path || undefined });
+    } else if (g.git_log) {
+      out.push({ type: "git_log", count: g.gl_count ? parseInt(g.gl_count, 10) : undefined });
+    }
+    lastIndex = EXTENDED_TOOLS_RE.lastIndex;
+  }
+  const after = text.slice(lastIndex);
+  if (lastIndex === 0) {
+    // No extended tool matched — return the original text untouched so the
+    // existing parser behavior (and tests) are preserved byte-for-byte.
+    return [{ type: "text", content: text }];
+  }
+  if (after.trim()) out.push({ type: "text", content: after });
+  return out;
 }
 
 export function renderMarkdown(text) {
