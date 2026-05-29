@@ -13,6 +13,9 @@ import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.j
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
 const DEFAULT_MODEL = "Voyager 1 Flash";
+// The Orbit Cloud gateway (your VPS). Customers only paste a license key; the
+// URL is fixed here. Leave a license key blank to use direct gcloud (dev mode).
+const GATEWAY_URL = "https://orbit.masher.me";
 const MODES = ["ask", "agents", "planning"];
 const MODE_LABELS = { ask: "❯ Ask", agents: "▣ Agents", planning: "☰ Planning" };
 
@@ -74,12 +77,11 @@ let selectedModel = state.selectedModel || DEFAULT_MODEL;
 let currentMode = MODES.includes(state.currentMode) ? state.currentMode : "ask";
 let selectedPreset = normalizePreset(state.selectedPreset);
 let selectedPlan = normalizePlan(state.selectedPlan);
-// Orbit Cloud: the gateway (your VPS) holds the GCP creds and enforces the
-// plan limit. The app authenticates with a license key; the plan it grants is
-// decided by the server, not chosen here. When no gatewayUrl is set the app
+// Orbit Cloud: the gateway (your VPS, GATEWAY_URL) holds the GCP creds and
+// enforces the plan limit. The app authenticates with a license key; the plan
+// it grants is decided by the server, not chosen here. With no key the app
 // talks to Vertex directly via gcloud (developer/offline mode).
 let cloud = {
-  gatewayUrl: state.cloud?.gatewayUrl || "",
   licenseKey: state.cloud?.licenseKey || ""
 };
 // Last plan/usage snapshot fetched from the gateway, or null in direct mode.
@@ -153,10 +155,10 @@ function persistState() {
 // be bypassed locally. Without a gateway we fall back to a local daily counter
 // (developer mode), so the pill still works offline.
 function gatewayActive() {
-  return !!(cloud.gatewayUrl && cloud.licenseKey);
+  return !!cloud.licenseKey;
 }
 function gatewayBase() {
-  return cloud.gatewayUrl ? cloud.gatewayUrl.trim().replace(/\/+$/, "") : "";
+  return GATEWAY_URL.replace(/\/+$/, "");
 }
 function todayKey() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC date)
@@ -1204,7 +1206,7 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
       agentMode: currentMode === "agents",
       mode: currentMode,
       preset: selectedPreset,
-      gatewayUrl: cloud.gatewayUrl,
+      gatewayUrl: gatewayActive() ? GATEWAY_URL : "",
       licenseKey: cloud.licenseKey
     });
     if (response && response.ok === false) {
@@ -2402,8 +2404,7 @@ function openSettingsModal() {
       </select>
     </div>
     <div class="settings-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px;flex-direction:column;align-items:stretch;gap:8px;">
-      <label style="margin:0;">Orbit Cloud<br><span style="font-size:11px;opacity:.6;">Server URL + license key. Your plan is set by the server — contact M4sh3r to change it.</span></label>
-      <input type="text" id="setCloudUrl" placeholder="https://orbit.yourdomain.com" style="width:100%;">
+      <label style="margin:0;">Orbit Cloud<br><span style="font-size:11px;opacity:.6;">Paste your license key to activate your plan. Contact M4sh3r to get one or change plans.</span></label>
       <input type="password" id="setLicenseKey" placeholder="License key" style="width:100%;">
       <button type="button" id="setActivate" class="modal-btn" style="align-self:flex-start;">Activate / Refresh plan</button>
     </div>
@@ -2439,16 +2440,13 @@ function openSettingsModal() {
   };
   renderPlanLines();
 
-  // Orbit Cloud (gateway URL + license key → plan/usage authority)
-  const cloudUrl = body.querySelector("#setCloudUrl");
+  // Orbit Cloud (license key → plan/usage authority; URL is hardcoded)
   const licenseKeyEl = body.querySelector("#setLicenseKey");
-  cloudUrl.value = cloud.gatewayUrl;
   licenseKeyEl.value = cloud.licenseKey;
   const saveCloud = () => {
-    cloud = { gatewayUrl: cloudUrl.value.trim(), licenseKey: licenseKeyEl.value.trim() };
+    cloud = { licenseKey: licenseKeyEl.value.trim() };
     persistState();
   };
-  cloudUrl.addEventListener("change", saveCloud);
   licenseKeyEl.addEventListener("change", saveCloud);
   body.querySelector("#setActivate").addEventListener("click", async () => {
     saveCloud();

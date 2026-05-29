@@ -93,13 +93,16 @@ orbit.yourdomain.com {
 
 ## 4. Point the app at it
 
-In each customer's Orbit → Settings → **Orbit Cloud**:
-
-- **Server URL:** `https://orbit.yourdomain.com`
-- **License key:** their key from `config.js`
-- Click **Activate / Refresh plan** → the plan + usage appear in the header.
+The gateway URL is hardcoded in the app (`GATEWAY_URL` in
+`src/orbit-app/app.js`, currently `https://orbit.masher.me`). Customers only
+enter their key: Orbit → Settings → **Orbit Cloud** → paste **license key** →
+**Activate**. The plan + usage then show in the header.
 
 That's it — they never touch GCP, and you never share a login.
+
+> **Hosting the website + API together on one box?** See `../DEPLOY.md` for a
+> copy-paste, beginner-friendly walkthrough (Docker Compose + automatic HTTPS).
+> This file is the deeper reference.
 
 ## Changing / revoking a plan
 

@@ -1,0 +1,37 @@
+# Hosts BOTH the Orbit website and the API on one box, behind automatic HTTPS.
+#   website  ->  https://orbit.masher.me/
+#   API      ->  https://orbit.masher.me/v1/...
+#
+# Start everything:   docker compose up -d --build
+# See the guide:      ../DEPLOY.md
+services:
+  gateway:
+    build: ../gateway
+    restart: unless-stopped
+    env_file: ./gateway.env            # you create this (see DEPLOY.md)
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /data/orbit-sa-key.json
+      USAGE_FILE: /data/usage.json
+    volumes:
+      - ./data:/data                   # holds your GCP key + usage counts
+      # Live-mount the plans/keys file so changing a plan just needs a restart,
+      # not a rebuild:  docker compose restart gateway
+      - ../gateway/config.js:/app/config.js:ro
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../orbit-website:/srv:ro        # the marketing website (static files)
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gateway
+
+volumes:
+  caddy_data:
+  caddy_config:

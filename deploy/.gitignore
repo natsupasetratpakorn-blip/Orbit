@@ -1,0 +1,3 @@
+# Never commit secrets or live data.
+gateway.env
+data/

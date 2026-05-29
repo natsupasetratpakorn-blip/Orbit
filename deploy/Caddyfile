@@ -1,0 +1,14 @@
+# Caddy gets a free HTTPS certificate for this domain automatically.
+orbit.masher.me {
+	# Anything starting with /v1/ goes to the API (the gateway container).
+	handle /v1/* {
+		reverse_proxy gateway:8080
+	}
+
+	# Everything else is the website (the files in orbit-website/).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
