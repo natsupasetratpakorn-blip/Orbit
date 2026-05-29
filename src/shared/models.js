@@ -7,7 +7,9 @@ export const MODELS = [
   "Voyager 2.1 Preview",
   "Orchestra 1.1"
 ];
-export const DEFAULT_MODEL = "Voyager 1 Flash";
+// Default to Voyager 1 (gemini-2.5-flash), not the "lite" tier — lite is weak
+// at instruction-following and context retention, which feels "dumb".
+export const DEFAULT_MODEL = "Voyager 1";
 
 export const MODEL_IDS = {
   "Voyager 1": "gemini-2.5-flash",

@@ -13,7 +13,7 @@ import { GATEWAY_URL } from "../shared/cloud-config.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
-const DEFAULT_MODEL = "Voyager 1 Flash";
+const DEFAULT_MODEL = "Voyager 1";
 // The Orbit Cloud gateway URL is shared with the main process (and overlay) via
 // cloud-config.js. Customers only paste a license key; the main process owns
 // the key. Leave it blank to use direct gcloud (dev mode).

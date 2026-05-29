@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHistoryStore } from "../src/shared/history-store.js";
+import { DEFAULT_MODEL } from "../src/shared/models.js";
 
 let tempDir;
 
@@ -20,7 +21,7 @@ describe("createHistoryStore", () => {
     const store = createHistoryStore(join(tempDir, "chat-history.json"));
 
     await expect(store.load()).resolves.toEqual({
-      selectedModel: "Voyager 1 Flash",
+      selectedModel: DEFAULT_MODEL,
       messages: [],
       workspacePath: "",
       agentMode: false,

@@ -216,8 +216,8 @@ const STUDY_BEHAVIORS =
   "   A: The process by which plants convert light energy into chemical energy.\n" +
   "   ```\n" +
   "   Orbit renders this block as an interactive review widget with built-in CSV export. Do NOT also output the cards as a plain markdown list — the fenced block is the entire deliverable. Aim for 5–20 cards unless the user specifies a count. Keep questions atomic (one fact per card) and answers brief.\n\n" +
-  "3) ASK-FIRST (build/code requests only). If the user's message is a request to BUILD, IMPLEMENT, CREATE, ADD, or MAKE a feature, tool, component, file, or script — AND important parameters are genuinely ambiguous (trigger UX, storage location, scope boundary, library choice, target file, data shape) — respond with up to 3 short clarifying questions wrapped in a <ask_user_questions> tag and then STOP. Do not begin coding, do not emit other tool tags, do not write files. Wait for the user's answers. RULES:\n" +
-  "   • Never ask more than 3 questions in one turn.\n" +
+  "3) ASK-FIRST (rare; build/code requests only). DEFAULT TO ACTING, NOT ASKING. For the vast majority of requests you should proceed immediately, making reasonable assumptions and stating them in one short line (e.g. \"Assuming X; say so if you'd prefer Y\"). ONLY stop to ask when ALL of these hold: (a) the message is a request to BUILD/IMPLEMENT/CREATE/ADD/MAKE something substantial, (b) a parameter is so ambiguous that a wrong guess would waste real work or be hard to undo, and (c) you cannot infer it from the workspace, conversation history, or screenshot. When that bar is met, respond with 1–3 short clarifying questions wrapped in a <ask_user_questions> tag and then STOP. Never ask about trivia, unfamiliar words/terms, definitions, or things you can look up or reasonably assume — just proceed. Do not ask the same thing twice across a conversation. RULES:\n" +
+  "   • Never ask more than 3 questions in one turn, and prefer 0.\n" +
   "   • Format each question on its own line starting with '- ' or '* ' inside the tag.\n" +
   "   • If you want to offer concrete multiple-choice options for a question, place them in brackets at the end of the question, separated by commas, e.g., '[React, Next.js, Vanilla]' or '[Yes, No]'. This allows Orbit to render beautiful, interactive inputs in the UI.\n" +
   "   • Skip the ask-first step for: bug fixes you can root-cause from existing code, small local edits, renames, formatting/style fixes, or any non-build request (chat, explain, debug, summarize, search).\n" +
@@ -359,7 +359,7 @@ function getSystemPrompt(model, agentMode, workspaceContext, mode, whisperLangua
 // Token-bloat guards. We cap both the number of historical turns kept and
 // the per-message length so a runaway tool-result or a 500-turn conversation
 // can't push the prompt past the model's context window.
-const HISTORY_MAX_TURNS = 30;
+const HISTORY_MAX_TURNS = 60;
 const MESSAGE_MAX_CHARS = 24000;
 
 function clipMessageContent(content) {

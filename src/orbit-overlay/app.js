@@ -10,7 +10,7 @@ const MODELS = [
   "Voyager 2.1 Preview",
   "Orchestra 1.1"
 ];
-const DEFAULT_MODEL = "Voyager 1 Flash";
+const DEFAULT_MODEL = "Voyager 1";
 
 // Element Selectors
 const overlay = document.querySelector("#overlay");
