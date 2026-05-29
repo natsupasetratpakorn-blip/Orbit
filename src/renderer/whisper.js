@@ -3,10 +3,83 @@
 
 import { pipeline, env } from "@huggingface/transformers";
 
+// ─── Persistent model cache (IndexedDB) ──────────────────────────────────
+// The overlay/app run from a file:// origin. In that context the Cache Storage
+// API (`window.caches`) that transformers.js uses for `env.useBrowserCache` is
+// unavailable (file:// is not a secure context), so the ~200 MB Whisper model
+// silently re-downloaded on every page load — and switching between the overlay
+// and the standalone app reloads the page, so it re-downloaded each switch.
+//
+// IndexedDB IS available on file:// and persists across reloads and restarts,
+// so we route transformers' model cache through it via the custom-cache hook.
+// The contract (from transformers.js hub.js) is an object implementing
+// `match(key) -> Response | undefined` and `put(key, Response)`.
+const IDB_NAME = "orbit-whisper-cache";
+const IDB_STORE = "files";
+
+let _cacheDbPromise = null;
+function openCacheDB() {
+  if (_cacheDbPromise) return _cacheDbPromise;
+  _cacheDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }).catch((err) => {
+    _cacheDbPromise = null; // allow retry on a later call
+    throw err;
+  });
+  return _cacheDbPromise;
+}
+
+function idbRequest(store, mode, fn) {
+  return openCacheDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, mode);
+    const req = fn(tx.objectStore(IDB_STORE));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+const indexedDbModelCache = {
+  async match(key) {
+    try {
+      const rec = await idbRequest(IDB_STORE, "readonly", (s) => s.get(key));
+      if (!rec) return undefined;
+      return new Response(rec.body, { status: 200, headers: rec.headers || {} });
+    } catch (e) {
+      console.warn("[Whisper] cache match failed:", e?.message);
+      return undefined;
+    }
+  },
+  async put(key, response) {
+    try {
+      const body = await response.arrayBuffer();
+      const headers = {};
+      response.headers.forEach((v, k) => { headers[k] = v; });
+      await idbRequest(IDB_STORE, "readwrite", (s) => s.put({ body, headers }, key));
+    } catch (e) {
+      // Don't let a cache write failure (e.g. quota) break transcription.
+      console.warn("[Whisper] cache put failed:", e?.message);
+    }
+  }
+};
+
 // Disable local model lookups (we want to fetch from the HF hub, not look for
-// /models on disk) and pin the cache so reruns are instant.
+// /models on disk). Route caching through IndexedDB instead of the Cache API
+// so the model is downloaded exactly once and reused across reloads.
 env.allowLocalModels = false;
-env.useBrowserCache = true;
+env.useBrowserCache = false;
+if (typeof indexedDB !== "undefined") {
+  env.useCustomCache = true;
+  env.customCache = indexedDbModelCache;
+} else {
+  // No IndexedDB (shouldn't happen in Electron) — fall back to the Cache API.
+  env.useBrowserCache = true;
+}
 
 // Model choice. whisper-base.en is English-only (74M params, ~290 MB FP32 /
 // far less with q4). Excellent for everyday dictation, very low memory and

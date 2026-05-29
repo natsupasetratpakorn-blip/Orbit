@@ -21,7 +21,9 @@ let historyStore;
 const workspaceHistoryStores = new Map();
 let tray = null;
 let activeWorkspacePath = "";
-let currentRendererMode = "overlay";
+// Orbit opens in the full standalone app ("mission-control") by default; users
+// can switch to the floating overlay via the in-app toggle or the tray.
+let currentRendererMode = "app";
 
 // Resolve the right history store for the currently active workspace.
 // Without a workspace, falls back to the global chat-history.json (legacy).
@@ -38,6 +40,33 @@ function getHistoryStoreForWorkspace() {
   const store = createHistoryStore(file);
   workspaceHistoryStores.set(activeWorkspacePath, store);
   return store;
+}
+
+// Clear the persisted conversation transcript(s) at launch so every session
+// starts fresh. Wipes the global store plus every per-workspace history file,
+// preserving each file's preferences (model/mode/etc.).
+async function resetHistoryOnStartup() {
+  try {
+    await historyStore.clearMessages();
+  } catch (err) {
+    console.warn("[Orbit Main] failed to reset global history:", err.message);
+  }
+  try {
+    const workspacesDir = join(app.getPath("userData"), "workspaces");
+    const entries = await readdir(workspacesDir);
+    for (const name of entries) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        await createHistoryStore(join(workspacesDir, name)).clearMessages();
+      } catch (err) {
+        console.warn(`[Orbit Main] failed to reset workspace history ${name}:`, err.message);
+      }
+    }
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.warn("[Orbit Main] failed to scan workspace history dir:", err.message);
+    }
+  }
 }
 // Persisted user-dragged position. Loaded from windowStateStore on launch and
 // rewritten (debounced) whenever the user finishes a drag. null means "never
@@ -347,6 +376,43 @@ async function loadScreenshotBase64(filePath) {
   }
 }
 
+// Per-attachment caps so a giant file can't blow the model's context window.
+const ATTACH_TEXT_MAX_CHARS = 60000;
+const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+
+// Read composer attachments (any file type) into Gemini-ready parts.
+// Images & PDFs become inlineData parts; everything else is read as UTF-8 text
+// and concatenated into a single labelled text blob. Returns
+// { parts: [...inlineData], text: "..." }.
+async function loadAttachmentParts(paths) {
+  const parts = [];
+  let text = "";
+  for (const filePath of (paths || [])) {
+    if (!filePath) continue;
+    const ext = extname(filePath).toLowerCase();
+    const name = filePath.split(/[\\/]/).pop();
+    try {
+      if (IMAGE_EXTS.has(ext)) {
+        const buffer = await readFile(filePath);
+        parts.push({ inlineData: { mimeType: mimeFromPath(filePath), data: buffer.toString("base64") } });
+      } else if (ext === ".pdf") {
+        const buffer = await readFile(filePath);
+        parts.push({ inlineData: { mimeType: "application/pdf", data: buffer.toString("base64") } });
+      } else {
+        // Treat anything else as text/code.
+        let content = await readFile(filePath, "utf8");
+        if (content.length > ATTACH_TEXT_MAX_CHARS) {
+          content = `${content.slice(0, ATTACH_TEXT_MAX_CHARS)}\n\n[Orbit truncated ${content.length - ATTACH_TEXT_MAX_CHARS} characters of this attachment.]`;
+        }
+        text += `\n\n--- ATTACHED FILE: ${name} ---\n${content}\n--- END ${name} ---`;
+      }
+    } catch (err) {
+      text += `\n\n[Orbit could not read attachment "${name}": ${err.message}]`;
+    }
+  }
+  return { parts, text };
+}
+
 // ─── Interactive region picker ─────────────────────────────────────────
 // Captures the primary display, opens a fullscreen transparent picker over
 // it, lets the user drag a rectangle, then writes the cropped PNG to the
@@ -578,23 +644,30 @@ function createOverlayWindow() {
     if (match) targetDisplay = match;
   }
 
+  // Open in whichever mode is the default. App mode wants a large, taskbar-
+  // visible, resizable window centered on screen; overlay mode wants the small
+  // always-on-top floating bar (and honors the user's saved drag position).
+  const isApp = currentRendererMode === "app";
+  const initialState = isApp ? "mission-control" : "collapsed";
   const calc = getOverlayBounds({
     displayWidth: targetDisplay.workAreaSize.width,
     displayHeight: targetDisplay.workAreaSize.height,
-    state: "collapsed"
+    state: initialState
   });
-  // Shift the calculated (centered-on-primary) bounds into the chosen display.
+  // Saved x/y is the floating-overlay drag position — only meaningful in
+  // overlay mode. App mode always opens centered.
+  const useSaved = !isApp && savedWindowState;
   const bounds = {
-    x: (savedWindowState?.x ?? (targetDisplay.workArea.x + calc.x)),
-    y: (savedWindowState?.y ?? (targetDisplay.workArea.y + calc.y)),
+    x: (useSaved?.x ?? (targetDisplay.workArea.x + calc.x)),
+    y: (useSaved?.y ?? (targetDisplay.workArea.y + calc.y)),
     width: calc.width,
     height: calc.height
   };
-  console.log("[Orbit Main] Initial overlay bounds:", bounds, "display:", targetDisplay.id);
+  console.log(`[Orbit Main] Initial bounds (${initialState}):`, bounds, "display:", targetDisplay.id);
 
   overlayWindow = new BrowserWindow({
     ...bounds,
-    alwaysOnTop: true,
+    alwaysOnTop: !isApp,
     backgroundColor: "#00000000",
     focusable: true,
     frame: false,
@@ -602,9 +675,9 @@ function createOverlayWindow() {
     maximizable: true,
     minimizable: false,
     movable: true,
-    resizable: false,
+    resizable: isApp,
     show: false,
-    skipTaskbar: true,
+    skipTaskbar: !isApp,
     transparent: true,
     webPreferences: {
       contextIsolation: true,
@@ -613,14 +686,19 @@ function createOverlayWindow() {
     }
   });
 
-  overlayWindow.setAlwaysOnTop(true, "screen-saver");
+  overlayWindow.setAlwaysOnTop(!isApp, isApp ? "normal" : "screen-saver");
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  overlayWindow.setMinimumSize(600, 40);
-  overlayWindow.loadFile(join(__dirname, "../renderer/index.html"));
-  
+  overlayWindow.setMinimumSize(isApp ? 1040 : 600, isApp ? 720 : 40);
+  overlayWindow.loadFile(join(__dirname, isApp ? "../app-renderer/index.html" : "../renderer/index.html"));
+
   overlayWindow.once("ready-to-show", () => {
-    console.log("[Orbit Main] Overlay ready-to-show — revealing.");
-    overlayWindow.showInactive();
+    console.log(`[Orbit Main] ready-to-show — revealing (${currentRendererMode}).`);
+    if (isApp) {
+      overlayWindow.show();
+      overlayWindow.focus();
+    } else {
+      overlayWindow.showInactive();
+    }
   });
 
   overlayWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
@@ -635,6 +713,27 @@ function createOverlayWindow() {
 }
 
 function registerIpc() {
+  // Shared PowerShell snippet that focuses a target window. Assumes `$title`
+  // is already defined. Tries, in order: AppActivate by exact title, a process
+  // whose MainWindowTitle CONTAINS the query, then a process whose ProcessName
+  // contains the query (so "Discord", "Code", "chrome" work even when the live
+  // window title is dynamic or empty). Errors with 'window-not-found' if none
+  // match. Used by type_text, keystroke, and focus_window for consistent
+  // targeting by either window title OR process name.
+  const windowActivationPsLines = () => [
+    "$wshell = New-Object -ComObject wscript.shell",
+    "$activated = $wshell.AppActivate($title)",
+    "if (-not $activated) {",
+    "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+    "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
+    "}",
+    "if (-not $activated) {",
+    "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -and $_.ProcessName.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
+    "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
+    "}",
+    "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }"
+  ];
+
   ipcMain.handle("history:load", (_event, workspacePath) => {
     if (typeof workspacePath === "string" && workspacePath) {
       activeWorkspacePath = normalizeWorkspaceRoot(workspacePath);
@@ -744,8 +843,9 @@ function registerIpc() {
     return { ok: true, displayId: display.id };
   });
   ipcMain.handle("ai:send", async (event, payload) => {
-    const { model, messages, screenshotPath, agentMode, streamId, workspaceContext, mode, whisperLanguage } = payload ?? {};
+    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset } = payload ?? {};
     const { imageBase64, mimeType } = await loadScreenshotBase64(screenshotPath);
+    const { parts: attachmentParts, text: attachmentText } = await loadAttachmentParts(attachments);
 
     const onChunk = streamId
       ? (text) => {
@@ -769,7 +869,8 @@ function registerIpc() {
     try {
       const reply = await sendToModel({
         model, messages, imageBase64, mimeType,
-        agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage,
+        attachmentParts, attachmentText,
+        agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset,
         abortSignal: controller.signal
       });
       return { ok: true, content: reply };
@@ -828,6 +929,18 @@ function registerIpc() {
       return null;
     }
     return result.filePaths[0];
+  });
+
+  // Multi-select file picker for composer attachments. Accepts ANY file type
+  // (images, PDFs, code, docs); the AI side reads images/PDFs as inline data
+  // and text/code as inline text. Returns [{ name, path }].
+  ipcMain.handle("dialog:open-files", async () => {
+    const result = await dialog.showOpenDialog(overlayWindow, {
+      title: "Attach files",
+      properties: ["openFile", "multiSelections"]
+    });
+    if (result.canceled || result.filePaths.length === 0) return [];
+    return result.filePaths.map((p) => ({ name: p.split(/[\\/]/).pop(), path: p }));
   });
 
   ipcMain.handle("workspace:get-active-agents-count", () => {
@@ -1205,18 +1318,8 @@ function registerIpc() {
 
     if (windowTitle && typeof windowTitle === "string" && windowTitle.trim()) {
       lines.push(
-        "$wshell = New-Object -ComObject wscript.shell",
         `$title = ${psString(windowTitle)}`,
-        "$activated = $wshell.AppActivate($title)",
-        "if (-not $activated) {",
-        "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
-        "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
-        "}",
-        "if (-not $activated) {",
-        "  $proc = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -and $_.ProcessName.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
-        "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
-        "}",
-        "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
+        ...windowActivationPsLines(),
         "Start-Sleep -Milliseconds 250"
       );
       console.log(`[Orbit Type] window="${windowTitle}" len=${text.length} lines=${segments.length} break=${mode} charDelay=${charDelay}`);
@@ -1265,9 +1368,15 @@ function registerIpc() {
   // the model can pick a real, currently-open window to target with
   // <type_text> instead of guessing a hard-coded title like "Notepad".
   ipcMain.handle("desktop:list-windows", async () => {
+    // Enumerate every process that owns a top-level window (MainWindowHandle
+    // != 0), NOT just those with a non-empty title. Some apps (Discord, certain
+    // Electron/UWP apps) report an empty MainWindowTitle yet are still
+    // targetable by process name, so we keep them and fall the `title` back to
+    // the process name. That way the model can target by either title or
+    // process name (matching the type/keystroke/focus fallbacks).
     const script = [
-      "$procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 }",
-      "$out = $procs | Select-Object -Property @{Name='title';Expression={$_.MainWindowTitle}}, @{Name='processName';Expression={$_.ProcessName}}, @{Name='pid';Expression={$_.Id}}",
+      "$procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }",
+      "$out = $procs | Select-Object -Property @{Name='title';Expression={ if ($_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0) { $_.MainWindowTitle } else { $_.ProcessName } }}, @{Name='processName';Expression={$_.ProcessName}}, @{Name='pid';Expression={$_.Id}}",
       "$out | ConvertTo-Json -Compress -Depth 3"
     ].join("\n");
 
@@ -1537,14 +1646,8 @@ Write-Output 'OK'
     const lines = ["Add-Type -AssemblyName System.Windows.Forms"];
     if (windowTitle && typeof windowTitle === "string" && windowTitle.trim()) {
       lines.push(
-        "$wshell = New-Object -ComObject wscript.shell",
         `$title = ${psString(windowTitle)}`,
-        "$activated = $wshell.AppActivate($title)",
-        "if (-not $activated) {",
-        "  $proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
-        "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
-        "}",
-        "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
+        ...windowActivationPsLines(),
         "Start-Sleep -Milliseconds 200"
       );
     }
@@ -1567,14 +1670,8 @@ Write-Output 'OK'
     }
     const psString = (s) => `'${s.replace(/'/g, "''")}'`;
     const script = [
-      "$wshell = New-Object -ComObject wscript.shell",
       `$title = ${psString(windowTitle)}`,
-      "$activated = $wshell.AppActivate($title)",
-      "if (-not $activated) {",
-      "  $proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.IndexOf($title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1",
-      "  if ($proc) { $activated = $wshell.AppActivate($proc.Id) }",
-      "}",
-      "if (-not $activated) { Write-Error 'window-not-found'; exit 1 }",
+      ...windowActivationPsLines(),
       "Write-Output 'OK'"
     ].join("\n");
     const res = await runPowerShell(script);
@@ -1681,6 +1778,11 @@ app.whenReady().then(async () => {
   });
 
   historyStore = createHistoryStore(join(app.getPath("userData"), "chat-history.json"));
+  // Reset conversation history on every launch (preferences are preserved).
+  // This guarantees a fresh session each time the user closes and reopens the
+  // overlay/app, and sidesteps stale tool-approval cards re-rendering from a
+  // persisted transcript.
+  await resetHistoryOnStartup();
   windowStateStorePath = join(app.getPath("userData"), "window-state.json");
   savedWindowState = await loadSavedWindowState();
   registerIpc();

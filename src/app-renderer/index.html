@@ -8,6 +8,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css" />
+    <!-- Resolve the bare "@huggingface/transformers" specifier used by the
+         local Whisper transcription module (shared with the overlay). -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@huggingface/transformers": "https://esm.sh/@huggingface/transformers@3.7.5"
+        }
+      }
+    </script>
   </head>
   <body>
     <canvas id="solarCanvas" class="solar-canvas" aria-hidden="true"></canvas>

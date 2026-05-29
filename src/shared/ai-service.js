@@ -230,6 +230,45 @@ const STUDY_BEHAVIORS =
   "     - What is the name of your database file?\n" +
   "     </ask_user_questions>\n";
 
+// Preset-specific steering appended to the system prompt. Keyed by the ids in
+// models.js PRESETS. "general" intentionally adds nothing (neutral baseline).
+const PRESET_PROMPTS = {
+  general: "",
+  studying:
+    "\n\nACTIVE PRESET — STUDYING:\n" +
+    "Act as a patient, encouraging tutor. Prioritize the user's understanding over just giving answers.\n" +
+    "- Explain concepts from first principles using plain language and concrete analogies; define jargon the first time it appears.\n" +
+    "- Break explanations into small, logically ordered steps. Surface the underlying 'why', not just the 'what'.\n" +
+    "- After a non-trivial explanation, offer a quick check-for-understanding question or a short worked example.\n" +
+    "- When the user is solving something, nudge with hints before revealing the full answer unless they ask outright.\n" +
+    "- Keep an upbeat, supportive tone; never condescending.",
+  coding:
+    "\n\nACTIVE PRESET — CODING:\n" +
+    "Operate as a senior software engineer. Code quality and correctness come first.\n" +
+    "- Give complete, runnable, idiomatic code; no placeholders or hand-waving. State assumptions explicitly.\n" +
+    "- Prefer the smallest correct change; explain trade-offs briefly and cite concrete file/line/API names.\n" +
+    "- Fix root causes, not symptoms. Call out edge cases, error handling, and security/perf concerns.\n" +
+    "- Match the language/framework conventions evident from the context. Keep prose tight — the code is the deliverable.",
+  math:
+    "\n\nACTIVE PRESET — MATH:\n" +
+    "Act as a rigorous mathematics problem solver.\n" +
+    "- Show your reasoning step by step; never skip the algebra. State theorems/rules as you apply them.\n" +
+    "- Use clear notation. For display math prefer fenced `latex` blocks or plain, unambiguous inline notation.\n" +
+    "- Verify the result (substitute back, sanity-check units/magnitude) before finishing.\n" +
+    "- End with a clearly delimited final answer on its own line, e.g. `**Answer:** …`.",
+  writing:
+    "\n\nACTIVE PRESET — WRITING:\n" +
+    "Act as a sharp writing partner and editor.\n" +
+    "- Match the requested tone, audience, and format; mirror the user's voice unless asked to change it.\n" +
+    "- Favor clear, concrete, active prose; cut filler, clichés, and redundancy.\n" +
+    "- When editing, preserve meaning and briefly note significant changes or offer alternatives.\n" +
+    "- Ask for the target audience or tone only if it's genuinely ambiguous."
+};
+
+function buildPresetBlock(preset) {
+  return PRESET_PROMPTS[preset] || "";
+}
+
 function buildWorkspaceBlock(workspaceContext) {
   if (!workspaceContext || !workspaceContext.path) {
     return "\n\n## WORKSPACE CONTEXT\nNo workspace is currently open. Ask the user to click the folder icon in the overlay to pick one if file context is needed.";
@@ -261,7 +300,7 @@ function buildWorkspaceBlock(workspaceContext) {
   return lines.join("\n");
 }
 
-function getSystemPrompt(model, agentMode, workspaceContext, mode, whisperLanguage) {
+function getSystemPrompt(model, agentMode, workspaceContext, mode, whisperLanguage, preset) {
   let modelInstructions = "";
   if (model === "Orchestra 1.1" || mode === "planning") {
     modelInstructions =
@@ -313,6 +352,7 @@ function getSystemPrompt(model, agentMode, workspaceContext, mode, whisperLangua
   if (!isPlannerOnly) base += READ_ONLY_TOOLS;
   if (isAgent) base += AGENT_INSTRUCTIONS;
   if (!isPlannerOnly) base += STUDY_BEHAVIORS;
+  base += buildPresetBlock(preset);
   return `${base}${buildWorkspaceBlock(workspaceContext)}`;
 }
 
@@ -433,7 +473,7 @@ async function getGCPCredentials() {
   }
 }
 
-export async function sendToModel({ model, messages, imageBase64, mimeType, agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, abortSignal }) {
+export async function sendToModel({ model, messages, imageBase64, mimeType, attachmentParts, attachmentText, agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset, abortSignal }) {
   const { projectId, accessToken } = await getGCPCredentials();
 
   // Auto model routing — pick Flash or Pro based on heuristics over the
@@ -467,7 +507,12 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
     });
   }
 
-  const latestParts = [{ text: latestUser || "" }];
+  // Append any text/code attachment content to the user's prompt so the model
+  // sees it inline with the question.
+  const latestText = attachmentText
+    ? `${latestUser || ""}${attachmentText}`
+    : (latestUser || "");
+  const latestParts = [{ text: latestText }];
   if (imageBase64) {
     latestParts.push({
       inlineData: {
@@ -475,6 +520,10 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
         data: imageBase64
       }
     });
+  }
+  // Composer attachments (images / PDFs) as inline data parts.
+  if (Array.isArray(attachmentParts)) {
+    for (const part of attachmentParts) latestParts.push(part);
   }
   // YouTube video context: Gemini on Vertex accepts a YouTube URL directly as
   // a fileData part and will watch + reason about the video. We scan the
@@ -501,7 +550,7 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
   const requestBody = {
     contents,
     systemInstruction: {
-      parts: [{ text: getSystemPrompt(resolvedModel, agentMode, workspaceContext, mode, whisperLanguage) }]
+      parts: [{ text: getSystemPrompt(resolvedModel, agentMode, workspaceContext, mode, whisperLanguage, preset) }]
     },
     // Dynamically tuned generationConfig for maximum code precision and plan stability
     generationConfig: {
@@ -694,7 +743,7 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
         // gets a reply while we figure out why the SSE path didn't yield text.
         console.log("[Vertex Stream] retrying without streaming as fallback…");
         const fallback = await sendToModel({
-          model, messages, imageBase64, mimeType, agentMode, workspaceContext
+          model, messages, imageBase64, mimeType, attachmentParts, attachmentText, agentMode, workspaceContext, mode, preset
           // intentionally omit onChunk — non-streaming path
         });
         if (fallback) {

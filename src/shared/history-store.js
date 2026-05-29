@@ -45,6 +45,14 @@ export function createHistoryStore(filePath) {
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
       return normalized;
+    },
+
+    // Wipe the conversation transcript while preserving the user's preferences
+    // (model, workspace, mode, panel width). Used to reset history on every
+    // launch so a new session always starts with a clean conversation.
+    async clearMessages() {
+      const current = await this.load();
+      return this.save({ ...current, messages: [] });
     }
   };
 }

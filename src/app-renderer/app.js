@@ -7,6 +7,8 @@ import {
   selectProject
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
+import { PRESETS, DEFAULT_PRESET, normalizePreset } from "../shared/models.js";
+import { transcribeWithWhisper, warmupWhisper } from "../renderer/whisper.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
@@ -69,15 +71,17 @@ const chatStatMessages = $("#chatStatMessages");
 let state = loadState();
 let selectedModel = state.selectedModel || DEFAULT_MODEL;
 let currentMode = MODES.includes(state.currentMode) ? state.currentMode : "ask";
+let selectedPreset = normalizePreset(state.selectedPreset);
 let attachScreenshot = !!state.attachScreenshot;
 let attachedFiles = []; // { name, path }
 let pendingRegionShot = null; // path of a one-shot region capture
-let recognition = null;
 let isListening = false;
 let audioCtx = null;
 let micStream = null;
 let micAnalyser = null;
 let micVisualizerRAF = null;
+let mediaRecorder = null;
+let audioChunks = [];
 let streaming = false;
 let streamingMessageId = null;
 let currentStreamId = null; // active AI stream id, used to abort/stop mid-stream
@@ -96,7 +100,9 @@ function loadState() {
         files: Array.isArray(p.files) ? p.files : [],
         workspacePath: typeof p.workspacePath === "string" ? p.workspacePath : ""
       }));
-      return parsed;
+      // Reset conversation history on every launch — keep projects, files,
+      // and preferences, but start each session with a single empty chat.
+      return resetConversations(parsed);
     }
   } catch { /* fall through */ }
   const def = createDefaultOrbitState();
@@ -104,9 +110,25 @@ function loadState() {
   return def;
 }
 
+// Collapse every project's conversations down to one fresh, empty chat so the
+// transcript doesn't carry over between launches. Projects, attached files, and
+// workspace paths are preserved.
+function resetConversations(s) {
+  const now = new Date().toISOString();
+  s.projects = (s.projects || []).map((p) => {
+    const chat = { id: crypto.randomUUID(), title: "New Conversation", createdAt: now, messages: [] };
+    return { ...p, chats: [chat] };
+  });
+  const first = s.projects[0];
+  s.activeProjectId = first?.id ?? s.activeProjectId ?? null;
+  s.activeChatId = first?.chats[0]?.id ?? null;
+  return s;
+}
+
 function persistState() {
   state.selectedModel = selectedModel;
   state.currentMode = currentMode;
+  state.selectedPreset = selectedPreset;
   state.attachScreenshot = attachScreenshot;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
@@ -1053,7 +1075,8 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
       attachments: attachmentsForThisTurn.map((a) => a.path),
       workspaceContext,
       agentMode: currentMode === "agents",
-      mode: currentMode
+      mode: currentMode,
+      preset: selectedPreset
     });
     if (response && response.ok === false) {
       // Backend reported a failure (e.g. user Stop, auth, timeout). Show it
@@ -1365,9 +1388,10 @@ function renderAttachedRow() {
 
 async function attachViaPicker() {
   try {
-    const path = await window.orbit?.selectWorkspaceDir?.();
-    if (!path) return;
-    addAttachment({ name: basename(path), path });
+    const files = await window.orbit?.selectFiles?.();
+    if (!Array.isArray(files) || files.length === 0) return;
+    files.forEach((f) => addAttachment({ name: f.name || basename(f.path), path: f.path }));
+    toast(files.length === 1 ? `Attached ${files[0].name}` : `Attached ${files.length} files`, "success");
   } catch (err) {
     toast(`Attach failed: ${err.message}`, "error");
   }
@@ -1525,33 +1549,18 @@ function setSelectedModel(name) {
   persistState();
 }
 
-// ─── Mic with visualizer ────────────────────────────────────────────────
-function setupSpeechRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    micButton.disabled = true;
-    micButton.title = "Speech recognition not available in this runtime";
-    return;
-  }
-  recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.onresult = (event) => {
-    let transcript = "";
-    for (let i = 0; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
-    }
-    promptInput.value = transcript.trim();
-    autoResize();
-  };
-  recognition.onend = () => stopMic();
-  recognition.onerror = (e) => { toast(`Mic error: ${e.error || "unknown"}`, "error"); stopMic(); };
-}
-
+// ─── Mic with visualizer (local Whisper, same as the overlay) ─────────────
+// The app used to use the cloud Web Speech API (webkitSpeechRecognition),
+// which streams mic audio to Google and was failing (net::ERR_FAILED on the
+// upload stream) on this machine. We now record locally and transcribe with
+// the offline Whisper model — identical to the overlay, no network upload.
 async function startMic() {
-  if (!recognition || isListening) return;
+  if (isListening) return;
+  audioChunks = [];
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true, channelCount: 1 }
+    });
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") await audioCtx.resume();
     const src = audioCtx.createMediaStreamSource(micStream);
@@ -1562,24 +1571,77 @@ async function startMic() {
     toast(`Mic access denied: ${err.message}`, "error");
     return;
   }
+
+  let mimeType = "audio/webm";
+  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) mimeType = "audio/webm;codecs=opus";
+
+  try {
+    mediaRecorder = new MediaRecorder(micStream, { mimeType });
+  } catch (err) {
+    toast(`Recorder failed: ${err.message}`, "error");
+    teardownMic();
+    return;
+  }
+
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(audioChunks, { type: mimeType });
+    teardownMic();
+    const prevPlaceholder = promptInput.placeholder;
+    micButton.disabled = true;
+    promptInput.placeholder = "Transcribing with Whisper…";
+    try {
+      const transcript = await transcribeWithWhisper(blob, {
+        onProgress: (p) => {
+          if (p.status === "progress" && p.file && p.progress != null) {
+            promptInput.placeholder = `Downloading Whisper model… ${Math.round(p.progress)}%`;
+          }
+        }
+      });
+      if (transcript) {
+        promptInput.value = (promptInput.value ? promptInput.value.trim() + " " : "") + transcript;
+        autoResize();
+        promptInput.focus();
+      } else {
+        toast("No speech detected — try again.", "default");
+      }
+    } catch (err) {
+      toast(`Whisper error: ${(err?.message || "failed").slice(0, 80)}`, "error");
+    } finally {
+      promptInput.placeholder = prevPlaceholder;
+      micButton.disabled = false;
+    }
+  };
+
   isListening = true;
   micButton.classList.add("is-listening");
   micVisualizer.hidden = false;
   drawMicViz();
-  try { recognition.start(); } catch { /* ignore double-start */ }
+  // 500ms timeslice so ondataavailable fires periodically during recording.
+  mediaRecorder.start(500);
 }
 
+// Stop recording — this fires mediaRecorder.onstop, which runs transcription.
 function stopMic() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    try { mediaRecorder.stop(); } catch { /* ignore */ }
+  } else {
+    teardownMic();
+  }
+}
+
+// Release mic + visualizer resources. Safe to call multiple times.
+function teardownMic() {
   isListening = false;
   micButton.classList.remove("is-listening");
   micVisualizer.hidden = true;
   if (micVisualizerRAF) { cancelAnimationFrame(micVisualizerRAF); micVisualizerRAF = null; }
-  try { recognition?.stop(); } catch { /* ignore */ }
   if (micStream) {
     micStream.getTracks().forEach((t) => t.stop());
     micStream = null;
   }
   micAnalyser = null;
+  mediaRecorder = null;
 }
 
 function drawMicViz() {
@@ -1624,12 +1686,14 @@ function drawMicViz() {
       const x = i * (bw + gap);
       const y = mid - h / 2;
 
+      // Monochrome bar: bright white core fading to soft grey, with a white
+      // glow that intensifies with amplitude.
       const grad = ctx.createLinearGradient(0, y, 0, y + h);
-      grad.addColorStop(0, `rgba(150, 190, 255, ${0.55 + v * 0.45})`);
-      grad.addColorStop(1, `rgba(255, 255, 255, ${0.45 + v * 0.45})`);
+      grad.addColorStop(0, `rgba(255, 255, 255, ${0.55 + v * 0.45})`);
+      grad.addColorStop(1, `rgba(150, 150, 158, ${0.4 + v * 0.45})`);
       ctx.fillStyle = grad;
-      ctx.shadowColor = "rgba(140, 180, 255, 0.55)";
-      ctx.shadowBlur = 4 + v * 6;
+      ctx.shadowColor = "rgba(255, 255, 255, 0.55)";
+      ctx.shadowBlur = 4 + v * 8;
 
       // Rounded-rect bar (mirrored around the vertical center).
       const r = Math.min(radius, h / 2);
@@ -1654,24 +1718,46 @@ let mouseY = 0.5;
 let targetMX = 0.5;
 let targetMY = 0.5;
 
+// Live pixel position of the cursor (for canvas-space interactivity like the
+// constellation effect). Updated in setupCursorGlow.
+let mousePxX = -9999;
+let mousePxY = -9999;
+
 function setupSolarBackground() {
   const ctx = solarCanvas.getContext("2d");
+  // Monochrome bodies — silver-white moons of varying brightness. No color.
   const planets = [
-    { radius: 88, size: 2.4, speed: 0.00065, color: "rgba(255,255,255,0.78)" },
-    { radius: 134, size: 3.4, speed: 0.00041, color: "rgba(140,200,255,0.62)" },
-    { radius: 188, size: 2.8, speed: 0.00029, color: "rgba(255,222,140,0.66)" },
-    { radius: 252, size: 5.1, speed: 0.00018, color: "rgba(255,255,255,0.52)" },
-    { radius: 322, size: 1.9, speed: 0.00013, color: "rgba(180,160,255,0.5)" }
+    { radius: 88, size: 2.4, speed: 0.00065, color: "rgba(255,255,255,0.82)" },
+    { radius: 134, size: 3.4, speed: 0.00041, color: "rgba(210,210,216,0.62)" },
+    { radius: 188, size: 2.8, speed: 0.00029, color: "rgba(255,255,255,0.5)" },
+    { radius: 252, size: 5.1, speed: 0.00018, color: "rgba(180,180,188,0.52)" },
+    { radius: 322, size: 1.9, speed: 0.00013, color: "rgba(235,235,240,0.5)" }
   ];
-  const stars = Array.from({ length: 220 }, () => ({
+  const stars = Array.from({ length: 260 }, () => ({
     x: Math.random(),
     y: Math.random(),
-    a: 0.08 + Math.random() * 0.45,
-    s: 0.4 + Math.random() * 1.6,
+    a: 0.08 + Math.random() * 0.5,
+    s: 0.4 + Math.random() * 1.7,
     twinkleSpeed: 0.0005 + Math.random() * 0.0015,
     twinklePhase: Math.random() * Math.PI * 2,
-    parallax: 0.4 + Math.random() * 1.6
+    parallax: 0.4 + Math.random() * 1.8
   }));
+
+  // Shooting stars (comets) spawn occasionally and streak across the sky for a
+  // premium, lively feel. Pure white with a fading tail.
+  const shootingStars = [];
+  function maybeSpawnShootingStar(W, H) {
+    if (shootingStars.length >= 2) return;
+    if (Math.random() > 0.004) return; // rare
+    const fromLeft = Math.random() < 0.5;
+    shootingStars.push({
+      x: fromLeft ? -40 : W + 40,
+      y: Math.random() * H * 0.5,
+      vx: (fromLeft ? 1 : -1) * (6 + Math.random() * 4),
+      vy: 2.2 + Math.random() * 1.8,
+      life: 1
+    });
+  }
 
   function resize() {
     const rect = solarCanvas.getBoundingClientRect();
@@ -1690,37 +1776,84 @@ function setupSolarBackground() {
     const H = solarCanvas.clientHeight;
     ctx.clearRect(0, 0, W, H);
 
-    // Parallax-shifted star field. Stars drift opposite the mouse for
-    // depth feel. Twinkle modulates alpha sinusoidally.
-    const offX = (mouseX - 0.5) * 24;
-    const offY = (mouseY - 0.5) * 24;
+    // Parallax-shifted star field. Stars drift opposite the mouse for depth.
+    // Stars near the cursor brighten and we connect nearby ones with faint
+    // lines (a constellation that forms under the pointer) — interactive.
+    const offX = (mouseX - 0.5) * 28;
+    const offY = (mouseY - 0.5) * 28;
+    const LINK_DIST = 130;
+    const nearby = [];
     stars.forEach((star) => {
       const twinkle = 0.5 + 0.5 * Math.sin(time * star.twinkleSpeed + star.twinklePhase);
-      ctx.fillStyle = `rgba(255,255,255,${star.a * (0.4 + 0.6 * twinkle)})`;
       const x = star.x * W - offX * star.parallax;
       const y = star.y * H - offY * star.parallax;
-      ctx.fillRect(x, y, star.s, star.s);
+      const dx = x - mousePxX;
+      const dy = y - mousePxY;
+      const dist = Math.hypot(dx, dy);
+      const prox = dist < LINK_DIST ? 1 - dist / LINK_DIST : 0;
+      // Brighten + slightly enlarge stars close to the cursor.
+      const alpha = Math.min(1, star.a * (0.4 + 0.6 * twinkle) + prox * 0.6);
+      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+      const size = star.s + prox * 1.6;
+      ctx.fillRect(x, y, size, size);
+      if (prox > 0) nearby.push({ x, y, prox });
     });
 
-    // Sun anchor — shifts subtly with mouse for parallax. The big radial
-    // glow gives the background a warm focal point that responds to the
-    // user's cursor without being distracting.
+    // Constellation links: line from the cursor to each nearby star, brighter
+    // the closer it is. Cheap because `nearby` is small.
+    if (nearby.length) {
+      for (const n of nearby) {
+        ctx.strokeStyle = `rgba(255,255,255,${n.prox * 0.22})`;
+        ctx.lineWidth = 0.6;
+        ctx.beginPath();
+        ctx.moveTo(mousePxX, mousePxY);
+        ctx.lineTo(n.x, n.y);
+        ctx.stroke();
+      }
+    }
+
+    // Shooting stars
+    maybeSpawnShootingStar(W, H);
+    for (let i = shootingStars.length - 1; i >= 0; i--) {
+      const s = shootingStars[i];
+      s.x += s.vx;
+      s.y += s.vy;
+      s.life -= 0.012;
+      if (s.life <= 0 || s.x < -60 || s.x > W + 60 || s.y > H + 60) {
+        shootingStars.splice(i, 1);
+        continue;
+      }
+      const tailX = s.x - s.vx * 6;
+      const tailY = s.y - s.vy * 6;
+      const tail = ctx.createLinearGradient(s.x, s.y, tailX, tailY);
+      tail.addColorStop(0, `rgba(255,255,255,${0.9 * s.life})`);
+      tail.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.strokeStyle = tail;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.stroke();
+    }
+
+    // Sun/black-hole anchor — a bright white core fading to black, shifting
+    // subtly with the mouse for parallax. Stays strictly black-and-white.
     const cx = W * 0.62 + (mouseX - 0.5) * 60;
     const cy = H * 0.44 + (mouseY - 0.5) * 60;
-    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 220);
-    glow.addColorStop(0, "rgba(255,255,255,0.18)");
-    glow.addColorStop(0.18, "rgba(140,180,255,0.10)");
-    glow.addColorStop(0.6, "rgba(40,30,60,0.04)");
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 240);
+    glow.addColorStop(0, "rgba(255,255,255,0.16)");
+    glow.addColorStop(0.22, "rgba(255,255,255,0.07)");
+    glow.addColorStop(0.6, "rgba(255,255,255,0.02)");
     glow.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(cx, cy, 220, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 240, 0, Math.PI * 2);
     ctx.fill();
 
     // Planetary orbits (ellipses) + moving bodies on them.
     ctx.lineWidth = 1;
     planets.forEach((planet, index) => {
-      ctx.strokeStyle = `rgba(255,255,255,${0.04 + (index % 2) * 0.012})`;
+      ctx.strokeStyle = `rgba(255,255,255,${0.045 + (index % 2) * 0.014})`;
       ctx.beginPath();
       ctx.ellipse(cx, cy, planet.radius * 1.55, planet.radius * 0.54, -0.18, 0, Math.PI * 2);
       ctx.stroke();
@@ -1753,7 +1886,15 @@ function setupCursorGlow() {
   window.addEventListener("mousemove", (e) => {
     targetMX = e.clientX / window.innerWidth;
     targetMY = e.clientY / window.innerHeight;
-    cursorGlow.style.transform = `translate3d(${e.clientX - 200}px, ${e.clientY - 200}px, 0)`;
+    mousePxX = e.clientX;
+    mousePxY = e.clientY;
+    cursorGlow.style.transform = `translate3d(${e.clientX - 230}px, ${e.clientY - 230}px, 0)`;
+  });
+  // When the cursor leaves the window, park the constellation origin off-screen
+  // so links don't freeze mid-air.
+  window.addEventListener("mouseleave", () => {
+    mousePxX = -9999;
+    mousePxY = -9999;
   });
 }
 
@@ -2084,6 +2225,12 @@ function openSettingsModal() {
       </select>
     </div>
     <div class="settings-row">
+      <label>Preset<br><span style="font-size:11px;opacity:.6;">Tunes how the model responds</span></label>
+      <select id="setPreset">
+        ${PRESETS.map((p) => `<option value="${p.id}">${p.icon} ${escapeHtml(p.label)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="settings-row">
       <label>Auto-attach screenshot to every message</label>
       <input type="checkbox" id="setAttachShot">
     </div>
@@ -2095,7 +2242,15 @@ function openSettingsModal() {
   `;
   body.querySelector("#setDefaultModel").value = selectedModel;
   body.querySelector("#setDefaultMode").value = currentMode;
+  body.querySelector("#setPreset").value = selectedPreset;
   body.querySelector("#setAttachShot").checked = attachScreenshot;
+
+  body.querySelector("#setPreset").addEventListener("change", (e) => {
+    selectedPreset = normalizePreset(e.target.value);
+    persistState();
+    const p = PRESETS.find((x) => x.id === selectedPreset);
+    toast(`Preset: ${p ? p.label : selectedPreset}`, "success", 1800);
+  });
 
   body.querySelector("#setDefaultModel").addEventListener("change", (e) => {
     setSelectedModel(e.target.value);
@@ -2123,6 +2278,7 @@ function openSettingsModal() {
     state = loadState();
     selectedModel = DEFAULT_MODEL;
     currentMode = "ask";
+    selectedPreset = DEFAULT_PRESET;
     attachScreenshot = false;
     setSelectedModel(selectedModel);
     setMode(currentMode);
@@ -2457,7 +2613,14 @@ window.addEventListener("drop", (e) => {
 setSelectedModel(selectedModel);
 setMode(currentMode);
 updateScreenshotToggleUI();
-setupSpeechRecognition();
+// Warm up the local Whisper model so the first dictation isn't a cold start.
+// Shares the IndexedDB model cache with the overlay (same file:// origin).
+if (!window.MediaRecorder) {
+  micButton.disabled = true;
+  micButton.title = "Recording not available in this runtime";
+} else {
+  warmupWhisper();
+}
 setupSolarBackground();
 setupCursorGlow();
 render();

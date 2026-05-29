@@ -1,21 +1,36 @@
 :root {
   color-scheme: dark;
-  --bg: #07070a;
-  --bg-soft: rgba(255, 255, 255, 0.04);
-  --bg-stronger: rgba(255, 255, 255, 0.07);
-  --border: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.18);
-  --text: #f5f6fa;
-  --muted: #9aa0ac;
+  /* Monochrome "deep space" palette — pure black voids, starlight whites,
+     and silver-grey midtones. No chromatic accents: the theme is black & white. */
+  --bg: #050506;
+  --bg-soft: rgba(255, 255, 255, 0.045);
+  --bg-stronger: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.20);
+  --text: #f6f7fa;
+  --muted: #969aa4;
   --accent: #ffffff;
-  --accent-soft: rgba(160, 195, 255, 0.65);
+  /* Soft starlight — used for focus rings, glows, active states. Pure white,
+     just lower alpha, so everything stays in the black-and-white family. */
+  --accent-soft: rgba(255, 255, 255, 0.62);
+  --accent-glow: rgba(255, 255, 255, 0.28);
   --danger: #ef4444;
   --success: #4ade80;
-  --shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  --shadow: 0 22px 70px rgba(0, 0, 0, 0.62);
   --radius: 14px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 * { box-sizing: border-box; }
+
+/* The `hidden` attribute must always win. Several elements (.empty-state,
+   .messages, .attached-files-row) set an explicit `display: flex`, which by
+   author-vs-UA cascade rules overrides the browser's default
+   `[hidden] { display: none }` — so toggling `el.hidden = true` had no visual
+   effect (e.g. the "Where should we point Voyager?" empty state lingered for
+   the whole conversation). This guarantees hidden means hidden. */
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -55,14 +70,15 @@ kbd {
   position: fixed;
   top: 0;
   left: 0;
-  width: 400px;
-  height: 400px;
+  width: 460px;
+  height: 460px;
   border-radius: 50%;
-  background: radial-gradient(circle at center, rgba(120, 180, 255, 0.12), rgba(0,0,0,0) 70%);
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03) 45%, rgba(0,0,0,0) 70%);
   pointer-events: none;
   z-index: 1;
   mix-blend-mode: screen;
-  transition: transform 80ms linear;
+  transition: transform 80ms linear, opacity 400ms ease;
+  will-change: transform;
 }
 
 /* ─── App shell ──────────────────────────────────────────────────────── */
@@ -104,13 +120,13 @@ kbd {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #fff, #6cf 70%, #3aa 100%);
-  box-shadow: 0 0 8px rgba(120, 200, 255, 0.6);
+  background: radial-gradient(circle at 30% 30%, #ffffff, #d8d8dc 60%, #6c6c72 100%);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.65);
   animation: pulse-brand 3s ease-in-out infinite;
 }
 @keyframes pulse-brand {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 6px rgba(120, 200, 255, 0.5); }
-  50%      { transform: scale(1.15); box-shadow: 0 0 14px rgba(150, 220, 255, 0.85); }
+  0%, 100% { transform: scale(1); box-shadow: 0 0 6px rgba(255, 255, 255, 0.5); }
+  50%      { transform: scale(1.18); box-shadow: 0 0 16px rgba(255, 255, 255, 0.9); }
 }
 .menu-item, .view-mode-button {
   -webkit-app-region: no-drag;
@@ -347,16 +363,19 @@ kbd {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 14px 24px 18px;
+  padding: 18px 32px 22px;
+  max-width: 1080px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .chat-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding-bottom: 10px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
 .project-chip {
   display: inline-flex;
@@ -429,15 +448,29 @@ kbd {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #fff, #88f 70%, #226 100%);
-  box-shadow: 0 0 22px rgba(150, 200, 255, 0.5);
+  background: radial-gradient(circle at 35% 35%, #ffffff, #c9c9cf 60%, #45454c 100%);
+  box-shadow: 0 0 26px rgba(255, 255, 255, 0.45);
+  animation: moon-bob 6s ease-in-out infinite;
+}
+@keyframes moon-bob {
+  0%, 100% { transform: translateY(0) scale(1); box-shadow: 0 0 22px rgba(255,255,255,0.4); }
+  50%      { transform: translateY(-3px) scale(1.05); box-shadow: 0 0 34px rgba(255,255,255,0.6); }
 }
 @keyframes ring-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
-.empty-state h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
-.empty-sub { margin: 0; color: var(--muted); font-size: 13px; }
+.empty-state h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  background: linear-gradient(180deg, #ffffff, #b8b8c0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.empty-sub { margin: 0; color: var(--muted); font-size: 13px; letter-spacing: 0.01em; }
 
 /* Messages */
 .messages {
@@ -445,8 +478,8 @@ kbd {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding-right: 6px;
+  gap: 18px;
+  padding-right: 8px;
   scroll-behavior: smooth;
 }
 .message {
@@ -461,14 +494,18 @@ kbd {
   to   { opacity: 1; transform: translateY(0); }
 }
 .message-meta { font-size: 10px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+/* User messages sit on the right, so their "You · time" label should too. */
+.message-user { align-items: flex-end; }
+.message-user .message-meta { text-align: right; }
 .message-body { font-size: 14px; line-height: 1.6; }
 .message-user .message-body {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 14px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-strong);
+  border-radius: 14px 14px 4px 14px;
+  padding: 11px 15px;
   align-self: flex-end;
   max-width: 80%;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
 }
 .message-assistant .message-body { padding: 4px 0; }
 .message.is-streaming .message-body::after {
@@ -581,7 +618,7 @@ kbd {
 }
 .composer:focus-within {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow), 0 0 0 1px rgba(160, 195, 255, 0.18);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(255, 255, 255, 0.16), 0 0 28px rgba(255, 255, 255, 0.05);
 }
 
 .attached-files-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -650,7 +687,7 @@ kbd {
   transition: all 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .round-button:hover { background: var(--bg-stronger); transform: translateY(-1px); }
-.round-button.is-active { background: rgba(120, 180, 255, 0.18); border-color: var(--accent-soft); color: var(--accent); }
+.round-button.is-active { background: rgba(255, 255, 255, 0.16); border-color: var(--accent-soft); color: var(--accent); box-shadow: 0 0 12px rgba(255,255,255,0.12); }
 .round-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
 
 .model-pill, .mode-pill {
@@ -692,7 +729,7 @@ kbd {
    whole (clickable) button — instead hide the arrow, show a stop square, and
    spin a ring around it to signal activity. */
 .send-button.is-streaming {
-  background: linear-gradient(135deg, #b6d4ff, #8a9cff);
+  background: linear-gradient(135deg, #e8e8ec, #a8a8b0);
   cursor: pointer;
   position: relative;
 }
@@ -702,8 +739,8 @@ kbd {
   position: absolute;
   inset: 2px;
   border-radius: 50%;
-  border: 2px solid rgba(20, 24, 40, 0.35);
-  border-top-color: rgba(20, 24, 40, 0.9);
+  border: 2px solid rgba(10, 10, 12, 0.30);
+  border-top-color: rgba(10, 10, 12, 0.9);
   animation: send-spin 0.8s linear infinite;
 }
 .send-button.is-streaming::after {
@@ -711,7 +748,7 @@ kbd {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  background: #141828;
+  background: #0a0a0c;
 }
 .send-button.is-streaming:hover { transform: translateY(-1px) scale(1.06); }
 @keyframes send-spin {
@@ -812,20 +849,20 @@ kbd {
 .mic-visualizer {
   width: 78px;
   height: 28px;
-  background: linear-gradient(180deg, rgba(10,14,28,0.55), rgba(8,10,20,0.4));
-  border: 1px solid rgba(140, 180, 255, 0.28);
+  background: linear-gradient(180deg, rgba(18,18,20,0.6), rgba(8,8,10,0.45));
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
-  box-shadow: inset 0 0 10px rgba(120, 160, 255, 0.12), 0 0 8px rgba(120,160,255,0.12);
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.08), 0 0 10px rgba(255, 255, 255, 0.08);
 }
 .round-button.is-listening {
-  background: rgba(239, 68, 68, 0.22);
-  border-color: rgba(239, 68, 68, 0.6);
-  color: #fda4af;
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #ffffff;
   animation: mic-pulse 1.3s ease-in-out infinite;
 }
 @keyframes mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-  50%      { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0); }
 }
 
 /* Toasts */
@@ -948,7 +985,7 @@ kbd {
   border-color: var(--accent-soft);
 }
 .workspace-badge.is-empty:hover {
-  background: rgba(120, 180, 255, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* ============================================================
@@ -1601,7 +1638,7 @@ kbd {
 .ask-question-select:focus {
   border-color: var(--accent-soft) !important;
   background-color: rgba(255, 255, 255, 0.06);
-  box-shadow: 0 0 0 3px rgba(160, 195, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
 }
 
 .ask-questions-submit-btn {
@@ -1618,7 +1655,7 @@ kbd {
 
 .ask-questions-submit-btn:hover:not(:disabled) {
   opacity: 0.9;
-  box-shadow: 0 0 12px rgba(160, 195, 255, 0.3);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.3);
 }
 
 .ask-questions-submit-btn:active:not(:disabled) {
@@ -1631,5 +1668,73 @@ kbd {
   color: var(--muted) !important;
   cursor: default !important;
   box-shadow: none !important;
+}
+
+/* ============================================================
+   Premium polish — monochrome glow, depth & motion
+   ============================================================ */
+
+/* Sidebar gets a faint top-down starlight wash for depth. */
+.sidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 240px),
+    rgba(6, 6, 8, 0.8);
+}
+
+/* Round tool buttons: lift + white glow on hover, springy press. */
+.round-button {
+  transition: transform 160ms var(--ease-spring), background 140ms ease, box-shadow 160ms ease, border-color 140ms ease;
+}
+.round-button:hover {
+  background: var(--bg-stronger);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 12px rgba(255, 255, 255, 0.06);
+}
+.round-button:active { transform: translateY(0) scale(0.92); }
+
+/* Model / mode pills: subtle glow on hover and a crisp active press. */
+.model-pill:hover, .mode-pill:hover {
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.05);
+}
+.model-pill:active, .mode-pill:active { transform: scale(0.97); }
+
+/* Send button gains a soft halo so it reads as the primary action. */
+.send-button {
+  box-shadow: 0 2px 10px rgba(255, 255, 255, 0.18), 0 0 0 0 rgba(255, 255, 255, 0.0);
+}
+.send-button:hover {
+  box-shadow: 0 6px 20px rgba(255, 255, 255, 0.28), 0 0 22px rgba(255, 255, 255, 0.12);
+}
+
+/* "New Conversation" gets a slow sweeping starlight shimmer. */
+.primary-nav-button { position: relative; overflow: hidden; }
+.primary-nav-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.14) 50%, transparent 70%);
+  transform: translateX(-120%);
+  transition: transform 700ms var(--ease-out);
+  pointer-events: none;
+}
+.primary-nav-button:hover::after { transform: translateX(120%); }
+
+/* Stat pills use tabular numerals so token/msg counts don't jitter. */
+.stat-pill { font-variant-numeric: tabular-nums; }
+
+/* Action cards lift slightly on hover for tactility. */
+.action-card { transition: transform 200ms var(--ease-out), box-shadow 200ms ease, border-color 160ms ease; }
+.action-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  border-color: var(--border-strong);
+}
+
+/* Respect users who prefer less motion: kill the ambient/decorative loops. */
+@media (prefers-reduced-motion: reduce) {
+  .brand-dot, .orbit-mark, .orbit-mark::before, .orbit-mark span,
+  .agent-dot.is-running, .round-button.is-listening { animation: none !important; }
+  .primary-nav-button::after { display: none; }
+  * { scroll-behavior: auto !important; }
 }
 

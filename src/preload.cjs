@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld("orbit", {
   
   // Workspace integration APIs
   selectWorkspaceDir: () => ipcRenderer.invoke("workspace:select-dir"),
+  selectFiles: () => ipcRenderer.invoke("dialog:open-files"),
   getWorkspaceInfo: (workspacePath) => ipcRenderer.invoke("workspace:get-info", workspacePath),
   readWorkspaceFile: (payload) => ipcRenderer.invoke("workspace:read-file", payload),
   searchWorkspace: (payload) => ipcRenderer.invoke("workspace:search", payload),
