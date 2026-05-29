@@ -34,7 +34,11 @@
       "PowerShell(Get-NetTCPConnection *)",
       "Bash(curl -s -o /dev/null -w \"site %{http_code}\\\\n\" http://localhost:8080/)",
       "Bash(curl -s -o /dev/null -w \"site %{http_code} og %{http_code}\\\\n\" http://localhost:8080/)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "PowerShell(npm *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(npx electron build/make-icon.js)",
+      "Bash(npx electron *)"
     ]
   }
 }

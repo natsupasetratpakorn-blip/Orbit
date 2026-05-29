@@ -21,3 +21,7 @@ yarn-error.log*
 *.local
 .DS_Store
 Thumbs.db
+
+# Built app binaries served from the site — keep the folder, not the .exe
+deploy/downloads/*
+!deploy/downloads/.gitkeep

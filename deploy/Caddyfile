@@ -5,6 +5,14 @@ orbit.masher.me {
 		reverse_proxy gateway:8080
 	}
 
+	# App downloads (the .exe you scp into deploy/downloads/). handle_path strips
+	# the /download prefix, so /download/Orbit.exe serves /downloads/Orbit.exe.
+	handle_path /download/* {
+		root * /downloads
+		header Content-Disposition attachment
+		file_server
+	}
+
 	# Everything else is the website (the files in orbit-website/).
 	handle {
 		root * /srv

@@ -1,0 +1,2 @@
+# The built Orbit.exe goes here on the server (scp it in). Git ignores the .exe
+# itself; this file just keeps the folder so the Caddy mount path exists.

@@ -32,6 +32,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ../orbit-website:/srv:ro        # the marketing website (static files)
+      - ./downloads:/downloads:ro       # the app .exe served at /download/*
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
