@@ -483,3 +483,41 @@ body.has-reticle .reticle { display: block; }
   .quotes { grid-template-columns: 1fr; }
 }
 
+/* ─── Pricing / mission plans ───────────────────────────────────────── */
+.pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; align-items: stretch; }
+.plan {
+  position: relative; display: flex; flex-direction: column; border: 1px solid var(--line);
+  border-radius: 18px; padding: 28px 24px; background: var(--panel); overflow: hidden;
+  transition: transform 240ms var(--ease), border-color 240ms ease, background 240ms ease, box-shadow 240ms ease;
+}
+.plan::after { /* cursor spotlight, same as feature cards */
+  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity 300ms ease; pointer-events: none;
+  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 0%), rgba(255,255,255,0.10), transparent 60%);
+}
+.plan:hover { border-color: var(--line-2); background: var(--panel-2); box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+.plan:hover::after { opacity: 1; }
+.plan.featured {
+  background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
+  border-color: var(--line-2); box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 24px 60px rgba(0,0,0,0.5);
+}
+.plan-badge {
+  position: absolute; top: 16px; right: 16px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #08080b; background: #fff; padding: 4px 10px; border-radius: 999px;
+}
+.plan-head { display: flex; align-items: center; gap: 11px; margin-bottom: 6px; }
+.plan-glyph { font-size: 20px; width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--line-2); border-radius: 10px; flex-shrink: 0; filter: drop-shadow(0 0 8px rgba(255,255,255,0.25)); }
+.plan-head h3 { font-size: 19px; }
+.plan-tag { color: var(--muted); font-size: 13px; min-height: 36px; }
+.plan-price { display: flex; align-items: baseline; gap: 2px; margin: 14px 0 20px; }
+.plan-cur { font-size: 20px; font-weight: 600; color: var(--text); align-self: flex-start; margin-top: 6px; }
+.plan-amt { font-family: "Space Grotesk", sans-serif; font-size: 46px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+.plan-per { font-size: 14px; color: var(--faint); margin-left: 4px; }
+.plan-feats { list-style: none; display: flex; flex-direction: column; gap: 11px; margin-bottom: 24px; }
+.plan-feats li { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; color: var(--muted); line-height: 1.4; }
+.plan-feats li::before { content: "✓"; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-2); font-size: 10px; flex-shrink: 0; margin-top: 1px; color: var(--text); }
+.plan-cta { margin-top: auto; width: 100%; }
+.pricing-note { text-align: center; margin-top: 28px; font-size: 13px; color: var(--faint); }
+
+@media (max-width: 1080px) { .pricing { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .pricing { grid-template-columns: 1fr; } }
+
