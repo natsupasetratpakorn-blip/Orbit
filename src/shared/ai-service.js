@@ -506,7 +506,11 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
     // Dynamically tuned generationConfig for maximum code precision and plan stability
     generationConfig: {
       temperature: isCodingModel ? 0.15 : isPlanningModel ? 0.3 : 0.7,
-      maxOutputTokens: isCodingModel || isPlanningModel ? 8192 : 4096
+      // These Gemini 2.5/3.x models support up to 64k output tokens. The old
+      // 8192/4096 caps truncated long coding/planning replies mid-sentence
+      // (finishReason MAX_TOKENS), which looked like the model "randomly
+      // stopping". Give coding/planning a generous budget and chat a roomier one.
+      maxOutputTokens: isCodingModel || isPlanningModel ? 32768 : 8192
     }
   };
 
@@ -514,7 +518,7 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
   // stop), forward that into the same controller so a single fetch cancellation
   // handles both cases.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort("timeout"), 60_000);
+  const timeout = setTimeout(() => controller.abort("timeout"), 120_000);
   if (abortSignal) {
     if (abortSignal.aborted) controller.abort("user-stop");
     abortSignal.addEventListener("abort", () => controller.abort("user-stop"), { once: true });
@@ -561,11 +565,14 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
       let lastEvent = null;
       let firstParseError = null;
       let totalBytesReceived = 0;
+      let finishReason = null;
 
       // Process a single parsed event payload (after JSON.parse).
       const processEvent = (event) => {
         lastEvent = event;
         eventCount += 1;
+        const fr = event.candidates?.[0]?.finishReason;
+        if (fr) finishReason = fr;
         // Vertex emits usageMetadata on the final chunk; forward it so the
         // renderer can update its running token total.
         if (event.usageMetadata && onUsage) {
@@ -667,7 +674,6 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
       clearTimeout(timeout);
 
       if (!full) {
-        const finishReason = lastEvent?.candidates?.[0]?.finishReason;
         const safetyRatings = lastEvent?.candidates?.[0]?.safetyRatings;
         const promptFeedback = lastEvent?.promptFeedback;
         console.log("[Vertex Stream] empty result.", {
@@ -707,6 +713,15 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
               : `No events parsed. Content-Type was "${contentType}", received ${totalBytesReceived} bytes.`;
         throw new Error(`Vertex AI streaming returned no text. ${hint}`);
       }
+
+      // The reply produced text but the stream ended on MAX_TOKENS — i.e. it was
+      // cut off mid-sentence. Surface a visible marker instead of returning the
+      // truncated text silently (which looks like the model "randomly stopped").
+      if (finishReason === "MAX_TOKENS") {
+        const notice = "\n\n_⚠️ Response truncated at the output-token limit. Ask me to continue._";
+        full += notice;
+        onChunk(notice);
+      }
       return full;
     }
 
@@ -732,6 +747,12 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
       throw new Error("Vertex AI returned no text content in response.");
     }
 
+    // Same truncation guard as the streaming path: flag a MAX_TOKENS cutoff
+    // instead of silently returning a mid-sentence reply.
+    if (data.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+      return `${reply}\n\n_⚠️ Response truncated at the output-token limit. Ask me to continue._`;
+    }
+
     return reply;
   } catch (error) {
     clearTimeout(timeout);
@@ -740,7 +761,7 @@ export async function sendToModel({ model, messages, imageBase64, mimeType, agen
       // can show "Stopped" instead of "Timed out".
       const reason = controller.signal.reason;
       if (reason === "user-stop") throw new Error("STOPPED");
-      throw new Error("Gemini request timed out after 60 seconds.");
+      throw new Error("Gemini request timed out after 120 seconds.");
     }
     throw new Error(`Gemini request failed: ${error.message}`);
   }

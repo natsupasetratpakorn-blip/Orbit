@@ -292,26 +292,38 @@ async function capturePrimaryScreen() {
   // display with scaleFactor > 1 (e.g. 150% scaling clicked the top-left
   // instead of center).
   const sf = display.scaleFactor || 1;
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: {
-      width: Math.round(display.size.width * sf),
-      height: Math.round(display.size.height * sf)
+
+  // Hide the overlay so it doesn't capture itself in the context screenshot
+  // sent to the model. Mirrors the region picker: hide, settle so the OS
+  // repaints without it, capture, then restore in a finally.
+  const wasVisible = overlayWindow?.isVisible();
+  if (overlayWindow && wasVisible) overlayWindow.hide();
+  if (wasVisible) await new Promise((r) => setTimeout(r, 80));
+
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: {
+        width: Math.round(display.size.width * sf),
+        height: Math.round(display.size.height * sf)
+      }
+    });
+
+    const source = sources[0];
+    if (!source || source.thumbnail.isEmpty()) {
+      return null;
     }
-  });
 
-  const source = sources[0];
-  if (!source || source.thumbnail.isEmpty()) {
-    return null;
+    const image = nativeImage.createFromDataURL(source.thumbnail.toDataURL());
+    const screenshotsDir = join(app.getPath("userData"), "screenshots");
+    const filePath = join(screenshotsDir, `screen-${Date.now()}.png`);
+    await mkdir(screenshotsDir, { recursive: true });
+    await writeFile(filePath, image.toPNG());
+
+    return filePath;
+  } finally {
+    if (overlayWindow && wasVisible) overlayWindow.showInactive();
   }
-
-  const image = nativeImage.createFromDataURL(source.thumbnail.toDataURL());
-  const screenshotsDir = join(app.getPath("userData"), "screenshots");
-  const filePath = join(screenshotsDir, `screen-${Date.now()}.png`);
-  await mkdir(screenshotsDir, { recursive: true });
-  await writeFile(filePath, image.toPNG());
-
-  return filePath;
 }
 
 function mimeFromPath(filePath) {
