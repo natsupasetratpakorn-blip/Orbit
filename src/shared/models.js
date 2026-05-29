@@ -63,12 +63,15 @@ export function normalizePreset(preset) {
 // ids must match the website's plan markup. Limits are enforced client-side in
 // the app today; a licensing server should authorize the active plan later.
 export const PLANS = [
+  { id: "free", label: "Free", priceTHB: 0, dailyLimit: 10 },
   { id: "liftoff", label: "Liftoff", priceTHB: 189, dailyLimit: 50 },
   { id: "orbit", label: "Orbit", priceTHB: 299, dailyLimit: 200 },
   { id: "deepspace", label: "Deep Space", priceTHB: 450, dailyLimit: 600 },
   { id: "interstellar", label: "Interstellar", priceTHB: 599, dailyLimit: Infinity }
 ];
-export const DEFAULT_PLAN = "liftoff";
+// No license key / offline → Free tier (10 messages/day). A license from the
+// gateway overrides this with the plan the server grants.
+export const DEFAULT_PLAN = "free";
 
 export function normalizePlan(plan) {
   return PLANS.some((p) => p.id === plan) ? plan : DEFAULT_PLAN;

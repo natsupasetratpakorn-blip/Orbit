@@ -5,6 +5,7 @@
 
 // Plans and their daily message limits. Use Infinity for unlimited.
 export const PLANS = {
+  free:         { label: "Free",         dailyLimit: 10 },
   liftoff:      { label: "Liftoff",      dailyLimit: 50 },
   orbit:        { label: "Orbit",        dailyLimit: 200 },
   deepspace:    { label: "Deep Space",   dailyLimit: 600 },
