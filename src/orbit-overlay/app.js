@@ -2720,13 +2720,22 @@ function renderAskUserQuestionsCard(part, messageId) {
     }
   });
   
-  // Disable if already answered by a subsequent message in chat.
+  // If a later user message already answered these questions, lock the card and
+  // restore the submitted values (parsed back by position) so the Q&A stays
+  // visible as one unit. The answer message itself isn't rendered as a separate
+  // bubble — see renderMessages.
   let isAnswered = false;
+  let priorAnswers = [];
   const msgIdx = chatMessages.findIndex(m => m.id === messageId);
   if (msgIdx !== -1) {
     for (let i = msgIdx + 1; i < chatMessages.length; i++) {
-      if (chatMessages[i].role === "user" && chatMessages[i].content.startsWith("**User's Answers:**")) {
+      const m = chatMessages[i];
+      if (m.role === "user" && typeof m.content === "string" && m.content.startsWith("**User's Answers:**")) {
         isAnswered = true;
+        priorAnswers = m.content.split("\n")
+          .map((line) => line.match(/^\s*\d+\.\s*.+?:\s?(.*)$/))
+          .filter(Boolean)
+          .map((mm) => mm[1]);
         break;
       }
     }
@@ -2734,12 +2743,15 @@ function renderAskUserQuestionsCard(part, messageId) {
 
   if (isAnswered) {
     submitBtn.disabled = true;
-    submitBtn.textContent = "Answers Submitted";
+    submitBtn.textContent = "✓ Answers Submitted";
     submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
     submitBtn.style.border = "1px solid rgba(255, 255, 255, 0.1)";
     submitBtn.style.color = "rgba(255, 255, 255, 0.4)";
     submitBtn.style.cursor = "default";
-    inputs.forEach(inp => inp.element.disabled = true);
+    inputs.forEach((inp, idx) => {
+      if (priorAnswers[idx] !== undefined) inp.element.value = priorAnswers[idx];
+      inp.element.disabled = true;
+    });
   }
 
   form.addEventListener("submit", async (e) => {
@@ -2825,6 +2837,12 @@ function renderMessages() {
 
   for (const message of chatMessages) {
     if (message.isToolResult) {
+      continue;
+    }
+    // Clarifying-question answers are shown inside the question card itself, so
+    // don't also render them as a separate user bubble — keeps the ask/answer
+    // exchange feeling like one message.
+    if (message.role === "user" && typeof message.content === "string" && message.content.startsWith("**User's Answers:**")) {
       continue;
     }
     const item = document.createElement("article");

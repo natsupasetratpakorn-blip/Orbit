@@ -13,15 +13,15 @@ Just open `index.html` in a browser:
 
 ```bash
 # from the repo root
-start website/index.html      # Windows
+start orbit-website/index.html      # Windows
 ```
 
 Or serve it (recommended, so module scripts load cleanly over http):
 
 ```bash
-npx serve website
+npx serve orbit-website
 # or
-python -m http.server 8080 --directory website
+python -m http.server 8080 --directory orbit-website
 ```
 
 ## Files

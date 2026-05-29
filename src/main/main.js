@@ -461,7 +461,7 @@ async function captureRegionInteractive() {
     }
   });
   pickerWindow.setAlwaysOnTop(true, "screen-saver");
-  pickerWindow.loadFile(join(__dirname, "../renderer/region-picker.html"));
+  pickerWindow.loadFile(join(__dirname, "../orbit-overlay/region-picker.html"));
 
   return new Promise((resolve) => {
     let resolved = false;
@@ -620,8 +620,8 @@ async function switchRendererMode(mode) {
   if (!overlayWindow) return;
   currentRendererMode = mode === "app" ? "app" : "overlay";
   const file = currentRendererMode === "app"
-    ? join(__dirname, "../app-renderer/index.html")
-    : join(__dirname, "../renderer/index.html");
+    ? join(__dirname, "../orbit-app/index.html")
+    : join(__dirname, "../orbit-overlay/index.html");
 
   await overlayWindow.loadFile(file);
   setOverlayState(currentRendererMode === "app" ? "mission-control" : "collapsed");
@@ -689,7 +689,7 @@ function createOverlayWindow() {
   overlayWindow.setAlwaysOnTop(!isApp, isApp ? "normal" : "screen-saver");
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWindow.setMinimumSize(isApp ? 1040 : 600, isApp ? 720 : 40);
-  overlayWindow.loadFile(join(__dirname, isApp ? "../app-renderer/index.html" : "../renderer/index.html"));
+  overlayWindow.loadFile(join(__dirname, isApp ? "../orbit-app/index.html" : "../orbit-overlay/index.html"));
 
   overlayWindow.once("ready-to-show", () => {
     console.log(`[Orbit Main] ready-to-show — revealing (${currentRendererMode}).`);

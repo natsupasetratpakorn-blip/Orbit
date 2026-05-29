@@ -8,7 +8,7 @@ import {
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
 import { PRESETS, DEFAULT_PRESET, normalizePreset } from "../shared/models.js";
-import { transcribeWithWhisper, warmupWhisper } from "../renderer/whisper.js";
+import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
@@ -287,6 +287,10 @@ function renderMessages() {
   messages.forEach((message) => {
     totalTokens += approxTokens(message.content);
     if (message.isToolResult) return;
+    // Clarifying-question answers are shown inside the question card itself,
+    // so don't also render them as a separate user bubble — keeps the whole
+    // ask/answer exchange feeling like one message.
+    if (message.role === "user" && typeof message.content === "string" && message.content.startsWith("**User's Answers:**")) return;
     const item = document.createElement("article");
     item.className = `message message-${message.role}`;
     item.dataset.msgId = message.id;
@@ -453,15 +457,24 @@ function renderAskUserQuestionsCard(part, messageId) {
     submitBtn.style.backgroundColor = "var(--accent)";
   });
   
-  // Disable if already answered by a subsequent message in chat.
+  // If a later user message already answered these questions, lock the card and
+  // restore the submitted values so the Q&A stays visible as one unit (the
+  // answer message itself is not rendered as a separate bubble — see
+  // renderMessages). Values are parsed back by position from the answer text.
   let isAnswered = false;
+  let priorAnswers = [];
   const chat = getActiveChat(state);
   if (chat) {
     const msgIdx = chat.messages.findIndex(m => m.id === messageId);
     if (msgIdx !== -1) {
       for (let i = msgIdx + 1; i < chat.messages.length; i++) {
-        if (chat.messages[i].role === "user" && chat.messages[i].content.startsWith("**User's Answers:**")) {
+        const m = chat.messages[i];
+        if (m.role === "user" && typeof m.content === "string" && m.content.startsWith("**User's Answers:**")) {
           isAnswered = true;
+          priorAnswers = m.content.split("\n")
+            .map((line) => line.match(/^\s*\d+\.\s*.+?:\s?(.*)$/))
+            .filter(Boolean)
+            .map((mm) => mm[1]);
           break;
         }
       }
@@ -470,11 +483,14 @@ function renderAskUserQuestionsCard(part, messageId) {
 
   if (isAnswered) {
     submitBtn.disabled = true;
-    submitBtn.textContent = "Answers Submitted";
+    submitBtn.textContent = "✓ Answers Submitted";
     submitBtn.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
     submitBtn.style.color = "var(--fg-dark)";
     submitBtn.style.cursor = "default";
-    inputs.forEach(inp => inp.element.disabled = true);
+    inputs.forEach((inp, idx) => {
+      if (priorAnswers[idx] !== undefined) inp.element.value = priorAnswers[idx];
+      inp.element.disabled = true;
+    });
   }
 
   form.addEventListener("submit", async (e) => {
@@ -496,7 +512,10 @@ function renderAskUserQuestionsCard(part, messageId) {
 
     sendMessage(answersText).catch(() => {});
   });
-  
+
+  // Append the submit button to the form — without this the card rendered with
+  // no way to send the answers (the original bug: "I can answer but can't send").
+  form.append(submitBtn);
   formContainer.append(form);
   card.append(formContainer);
   return card;
@@ -1554,13 +1573,44 @@ function setSelectedModel(name) {
 // which streams mic audio to Google and was failing (net::ERR_FAILED on the
 // upload stream) on this machine. We now record locally and transcribe with
 // the offline Whisper model — identical to the overlay, no network upload.
+
+// Pick the most likely real microphone instead of trusting the system default,
+// which is often a virtual/dead input (Stereo Mix, loopback) that records
+// silence — the reason dictation "detected nothing". Mirrors the overlay.
+async function pickBestMicDeviceId() {
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    probe.getTracks().forEach((t) => t.stop());
+  } catch { /* user may still grant below */ }
+  let inputs = [];
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    inputs = devices.filter((d) => d.kind === "audioinput");
+  } catch { return null; }
+  if (inputs.length === 0) return null;
+  const score = (label) => {
+    const l = (label || "").toLowerCase();
+    if (!l) return 0;
+    if (/(voicemod|stereo mix|line in|cable|vb-audio|voicemeeter|virtual|loopback|hdmi|monitor of|nvidia broadcast|krisp)/.test(l)) return -50;
+    if (l.startsWith("default -") || l.startsWith("communications -")) return -5;
+    if (/(razer|blackshark|hyperx|steelseries|sennheiser|shure|blue yeti|samson|rode|audio[- ]technica|airpods|jabra|logitech)/.test(l)) return 100;
+    if (/(microphone|mic|headset|bluetooth)/.test(l)) return 10;
+    return 1;
+  };
+  inputs.sort((a, b) => score(b.label) - score(a.label));
+  return inputs[0]?.deviceId || null;
+}
+
 async function startMic() {
   if (isListening) return;
   audioChunks = [];
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true, channelCount: 1 }
-    });
+    const deviceId = await pickBestMicDeviceId();
+    const audioConstraints = { echoCancellation: true, noiseSuppression: false, autoGainControl: true, channelCount: 1, sampleRate: 48000 };
+    if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    const track = micStream.getAudioTracks()[0];
+    if (track) console.log(`[App Mic] recording via "${track.label}"`);
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") await audioCtx.resume();
     const src = audioCtx.createMediaStreamSource(micStream);

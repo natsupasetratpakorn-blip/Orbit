@@ -20,6 +20,23 @@
     <div class="grain" aria-hidden="true"></div>
     <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
 
+    <!-- Custom targeting-reticle cursor -->
+    <div class="reticle" id="reticle" aria-hidden="true"><span class="reticle-dot"></span></div>
+
+    <!-- Mission-control telemetry HUD (corners) -->
+    <div class="hud" aria-hidden="true">
+      <div class="hud-corner tl"><span class="hud-k">ORBIT // DEEP SPACE NETWORK</span><span class="hud-v" id="hudClock">T+00:00:00</span></div>
+      <div class="hud-corner tr"><span class="hud-k">CURSOR VECTOR</span><span class="hud-v" id="hudCoords">x000 · y000</span></div>
+      <div class="hud-corner bl"><span class="hud-k">SIGNAL</span><span class="hud-v"><span class="hud-live"></span> NOMINAL · <span id="hudDepth">0%</span></span></div>
+      <div class="hud-corner br"><span class="hud-k">DISTANCE</span><span class="hud-v" id="hudDist">0.000 AU</span></div>
+    </div>
+
+    <!-- Scroll-tracked flight path with a travelling probe + waypoints -->
+    <div class="trajectory" id="trajectory" aria-hidden="true">
+      <span class="traj-line"></span>
+      <span class="traj-probe" id="trajProbe"></span>
+    </div>
+
     <!-- ─── Nav ─────────────────────────────────────────────────────── -->
     <header class="nav" id="nav">
       <a class="brand" href="#top" aria-label="Orbit home">
@@ -27,6 +44,7 @@
         <span class="brand-name">ORBIT</span>
       </a>
       <nav class="nav-links" aria-label="Primary">
+        <a href="#demo">Demo</a>
         <a href="#features">Features</a>
         <a href="#models">Models</a>
         <a href="#modes">Modes</a>
@@ -34,7 +52,7 @@
         <a href="#agents">Agents</a>
       </nav>
       <div class="nav-actions">
-        <a href="#download" class="btn btn-ghost">Sign in</a>
+        <a href="#download" class="nav-signin">Sign in</a>
         <a href="#download" class="btn btn-solid magnetic">Download</a>
       </div>
       <button class="nav-burger" id="navBurger" aria-label="Menu"><span></span><span></span><span></span></button>
@@ -43,13 +61,14 @@
     <main id="top">
       <!-- ─── Hero ──────────────────────────────────────────────────── -->
       <section class="hero">
+        <canvas id="orbits" class="orbits-canvas" aria-hidden="true"></canvas>
         <div class="hero-inner">
           <a class="badge reveal" href="#models">
             <span class="badge-dot"></span> Powered by the Voyager model series
             <span class="badge-arrow">→</span>
           </a>
           <h1 class="hero-title reveal" data-delay="1">
-            The AI copilot that<br /><span class="shimmer">actually sees your screen.</span>
+            The AI copilot that<br /><span class="shimmer" data-scramble>actually sees your screen.</span>
           </h1>
           <p class="hero-sub reveal" data-delay="2">
             Orbit is a desktop companion that watches your screen, edits your code, automates your
@@ -60,16 +79,19 @@
               <svg viewBox="0 0 24 24" class="ico"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
               Download for Windows
             </a>
-            <a href="#features" class="btn btn-ghost btn-lg">Explore features</a>
+            <a href="#demo" class="btn btn-ghost btn-lg">
+              <svg viewBox="0 0 24 24" class="ico"><path d="m8 5 11 7-11 7z"/></svg>
+              See how it works
+            </a>
           </div>
           <div class="hero-stats reveal" data-delay="4">
-            <div class="stat"><span class="stat-num" data-count="7">0</span><span class="stat-label">Voyager models</span></div>
+            <div class="stat" tabindex="0" data-tip="Auto, Voyager 1 / 1 Flash / 2 / 2 Pro / 2.1 Preview, and Orchestra — one for every task."><span class="stat-num" data-count="7">0</span><span class="stat-label">Voyager models</span></div>
             <div class="stat-div"></div>
-            <div class="stat"><span class="stat-num" data-count="100">0</span><span class="stat-suffix">%</span><span class="stat-label">Local voice</span></div>
+            <div class="stat" tabindex="0" data-tip="Dictation runs on a local Whisper model — private &amp; secure, nothing leaves your machine."><span class="stat-num" data-count="100">0</span><span class="stat-suffix">%</span><span class="stat-label">Local voice</span></div>
             <div class="stat-div"></div>
-            <div class="stat"><span class="stat-num" data-count="12">0</span><span class="stat-label">Agent steps / run</span></div>
+            <div class="stat" tabindex="0" data-tip="Background agents work autonomously for up to 12 steps — edit, run, verify — then report back."><span class="stat-num" data-count="12">0</span><span class="stat-label">Agent steps / run</span></div>
             <div class="stat-div"></div>
-            <div class="stat"><span class="stat-num" data-count="0" data-text="∞">0</span><span class="stat-label">Windows reachable</span></div>
+            <div class="stat" tabindex="0" data-tip="Type, click, scroll &amp; hotkey into any open window — matched by title or process name."><span class="stat-num" data-count="0" data-text="∞">0</span><span class="stat-label">Windows reachable</span></div>
           </div>
         </div>
 
@@ -123,6 +145,47 @@
           <span>OFFLINE VOICE</span><span>•</span><span>BACKGROUND AGENTS</span><span>•</span>
         </div>
       </div>
+
+      <!-- ─── Interactive demo ──────────────────────────────────────── -->
+      <section class="section" id="demo">
+        <div class="section-head reveal">
+          <span class="eyebrow">See how it works</span>
+          <h2>Watch Orbit work.</h2>
+          <p>A live, scripted run — Orbit reads the screen, plans, edits files, runs the tests, and reports back. No edit is real; it's a faithful simulation of the loop.</p>
+        </div>
+
+        <div class="demo reveal">
+          <div class="demo-window">
+            <div class="window-bar">
+              <span class="brand-mark sm"><span class="brand-core"></span></span>
+              <span class="window-title" id="demoTitle">orbit · agents</span>
+              <span class="window-dots"><i></i><i></i><i></i></span>
+            </div>
+            <div class="demo-screen" id="demoScreen">
+              <!-- steps injected by script.js -->
+            </div>
+            <div class="demo-controls">
+              <button class="demo-btn" id="demoReplay" type="button">
+                <svg viewBox="0 0 24 24" class="ico"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                Replay
+              </button>
+              <div class="demo-track"><span class="demo-fill" id="demoFill"></span></div>
+              <span class="demo-status" id="demoStatus">Ready</span>
+            </div>
+          </div>
+          <div class="demo-side">
+            <h3>What you're seeing</h3>
+            <ul class="demo-list" id="demoList">
+              <li data-step="0">Screen captured for context</li>
+              <li data-step="1">Workspace searched &amp; read</li>
+              <li data-step="2">File patched surgically</li>
+              <li data-step="3">Tests run in your shell</li>
+              <li data-step="4">Summary reported back</li>
+            </ul>
+            <a href="#download" class="btn btn-solid magnetic">Try it yourself</a>
+          </div>
+        </div>
+      </section>
 
       <!-- ─── Features (bento) ──────────────────────────────────────── -->
       <section class="section" id="features">
@@ -317,10 +380,43 @@
         </div>
       </section>
 
+      <!-- ─── Testimonials ──────────────────────────────────────────────
+           NOTE: placeholder quotes — replace with real attributed testimonials
+           before publishing. Personas are illustrative, not real people. -->
+      <section class="section" id="voices">
+        <div class="section-head reveal">
+          <span class="eyebrow">Transmissions</span>
+          <h2>From the early crew.</h2>
+          <p>What testers say after a week with Orbit on their desktop.</p>
+        </div>
+        <div class="quotes">
+          <figure class="quote reveal">
+            <div class="quote-stars" aria-label="5 out of 5">★★★★★</div>
+            <blockquote>“It reads my screen and just <em>gets it</em>. I stopped copy-pasting stack traces — Orbit already saw the error.”</blockquote>
+            <figcaption><span class="avatar">M</span><span><b>Maya R.</b><br />Full-stack developer</span></figcaption>
+          </figure>
+          <figure class="quote reveal">
+            <div class="quote-stars" aria-label="5 out of 5">★★★★★</div>
+            <blockquote>“Offline voice dictation that's actually private sold me. I talk, it types, nothing leaves my machine.”</blockquote>
+            <figcaption><span class="avatar">K</span><span><b>Kenji T.</b><br />CS student</span></figcaption>
+          </figure>
+          <figure class="quote reveal">
+            <div class="quote-stars" aria-label="5 out of 5">★★★★★</div>
+            <blockquote>“I fire off a background agent, go grab coffee, and come back to passing tests. The overlay never gets in the way.”</blockquote>
+            <figcaption><span class="avatar">S</span><span><b>Sofia L.</b><br />Indie hacker</span></figcaption>
+          </figure>
+        </div>
+        <p class="quotes-note reveal">★ Illustrative testimonials — swap in real user quotes before launch.</p>
+      </section>
+
       <!-- ─── Download CTA ──────────────────────────────────────────── -->
       <section class="cta" id="download">
         <div class="cta-inner reveal">
-          <div class="brand-mark xl"><span class="brand-core"></span></div>
+          <div class="record" id="record" aria-hidden="true">
+            <div class="record-grooves"></div>
+            <div class="record-label"><span class="brand-core"></span></div>
+            <div class="record-shine"></div>
+          </div>
           <h2>Point Voyager at your work.</h2>
           <p>Bring a screen-aware copilot to your desktop. Free to try.</p>
           <div class="hero-cta">
