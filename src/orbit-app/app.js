@@ -1227,8 +1227,9 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
       }
     } else {
       finalText = response?.text || response?.content || "";
-      // Successful billable turn in gateway mode — pull the authoritative count.
-      if (countsAgainstLimit && gatewayActive()) refreshUsage({ silent: true });
+      // Successful turn in gateway mode — pull the authoritative count from the
+      // server (it's the source of truth for what was billed).
+      if (gatewayActive()) refreshUsage({ silent: true });
     }
   } catch (err) {
     finalText = `_Request failed: ${err?.message || err}_`;
