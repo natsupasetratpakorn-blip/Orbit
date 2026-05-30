@@ -19,11 +19,19 @@ export const MODEL_IDS = {
   "Voyager 2.1 Preview": "gemini-3.5-flash",
   "Orchestra 1.1": "gemini-2.5-flash-lite"
 };
+export const DEFAULT_MODEL_ID = MODEL_IDS[DEFAULT_MODEL];
 
 // Heuristic router for "Auto" model. Looks at prompt length, presence of code
-// fences/keywords, and mode to pick between Flash (cheap/fast) and Pro
-// (heavy reasoning). Returns one of the concrete MODELS entries.
-export function routeAutoModel({ text = "", mode = "ask", agentMode = false } = {}) {
+// fences/keywords, conversation depth, and mode to pick the right tier.
+// Returns one of the concrete MODELS entries.
+//
+// IMPORTANT: the floor for normal chat is Voyager 1 (gemini-2.5-flash), NOT the
+// "lite" tier. Lite drops conversational context and ends up asking the user to
+// repeat themselves ("find me a good one" → "a good what?"), which is exactly
+// the robotic behavior we want to avoid. Auto only ever uses lite for the most
+// trivial *first* message in a conversation; once any back-and-forth exists,
+// coreference matters and we stay on the stronger flash model.
+export function routeAutoModel({ text = "", mode = "ask", agentMode = false, turnCount = 1 } = {}) {
   const t = String(text || "");
   const len = t.length;
   const hasCodeFence = /```/.test(t);
@@ -34,7 +42,14 @@ export function routeAutoModel({ text = "", mode = "ask", agentMode = false } = 
   if (agentMode || hasCodeFence || hasCodeyKeyword || isLong) {
     return "Voyager 2.1 Preview";
   }
-  return "Voyager 1 Flash";
+  // Mid-conversation follow-ups rely on earlier turns — never use the
+  // context-weak lite tier here.
+  if (turnCount > 1) return "Voyager 1";
+  // First turn: only a tiny opener ("hi", "thanks", "yo") takes the cheap lite
+  // tier. Any actual question — even a short one like "which keyboard is best?"
+  // — deserves the stronger flash model so the very first answer lands well.
+  if (len <= 25) return "Voyager 1 Flash";
+  return "Voyager 1";
 }
 
 export function normalizeModel(model) {

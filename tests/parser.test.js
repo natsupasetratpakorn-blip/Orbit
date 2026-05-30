@@ -226,3 +226,29 @@ describe("applySearchReplacePatches", () => {
     expect(() => applySearchReplacePatches(original, patch)).toThrow("Could not find search block");
   });
 });
+
+describe("batch read + open_app tools", () => {
+  it("parses <read_files> with a newline/comma path list", () => {
+    expect(parseAIResponse("<read_files>\nsrc/a.js\nsrc/b.js\n</read_files>")).toEqual([
+      { type: "read_files", glob: "", paths: ["src/a.js", "src/b.js"] }
+    ]);
+    expect(parseAIResponse("<read_files>a.js, b.js</read_files>")).toEqual([
+      { type: "read_files", glob: "", paths: ["a.js", "b.js"] }
+    ]);
+  });
+
+  it("parses <read_files glob> self-closing form", () => {
+    expect(parseAIResponse('<read_files glob="src/**/*.js" />')).toEqual([
+      { type: "read_files", glob: "src/**/*.js", paths: [] }
+    ]);
+  });
+
+  it("parses <open_app> and its aliases", () => {
+    expect(parseAIResponse('<open_app name="Spotify" />')).toEqual([
+      { type: "open_app", name: "Spotify", args: "" }
+    ]);
+    expect(parseAIResponse('<launch_app name="notepad" args="todo.txt" />')).toEqual([
+      { type: "open_app", name: "notepad", args: "todo.txt" }
+    ]);
+  });
+});

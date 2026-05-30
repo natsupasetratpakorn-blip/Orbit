@@ -25,7 +25,9 @@ describe("createHistoryStore", () => {
       messages: [],
       workspacePath: "",
       agentMode: false,
-      panelWidthMode: "standard"
+      panelWidthMode: "standard",
+      conversationSummary: "",
+      summarizedCount: 0
     });
   });
 
@@ -60,10 +62,29 @@ describe("createHistoryStore", () => {
       ],
       workspacePath: "",
       agentMode: false,
-      panelWidthMode: "standard"
+      panelWidthMode: "standard",
+      conversationSummary: "",
+      summarizedCount: 0
     });
 
     const raw = await readFile(filePath, "utf8");
     expect(JSON.parse(raw).messages).toHaveLength(1);
+  });
+
+  it("clears transcript and rolling memory together", async () => {
+    const store = createHistoryStore(join(tempDir, "chat-history.json"));
+
+    await store.save({
+      selectedModel: "Voyager 1",
+      messages: [{ role: "user", content: "remember this" }],
+      conversationSummary: "The user is building Orbit.",
+      summarizedCount: 12
+    });
+
+    await expect(store.clearMessages()).resolves.toMatchObject({
+      messages: [],
+      conversationSummary: "",
+      summarizedCount: 0
+    });
   });
 });

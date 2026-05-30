@@ -8,7 +8,11 @@ const EMPTY_HISTORY = {
   messages: [],
   workspacePath: "",
   agentMode: false,
-  panelWidthMode: "standard"
+  panelWidthMode: "standard",
+  // Rolling in-session memory: a compact summary of turns older than the
+  // verbatim window, and how many of the oldest messages it already covers.
+  conversationSummary: "",
+  summarizedCount: 0
 };
 
 function normalizeHistory(value) {
@@ -21,7 +25,9 @@ function normalizeHistory(value) {
     messages: Array.isArray(value.messages) ? value.messages : [],
     workspacePath: typeof value.workspacePath === "string" ? value.workspacePath : "",
     agentMode: typeof value.agentMode === "boolean" ? value.agentMode : false,
-    panelWidthMode: value.panelWidthMode === "wide" ? "wide" : "standard"
+    panelWidthMode: value.panelWidthMode === "wide" ? "wide" : "standard",
+    conversationSummary: typeof value.conversationSummary === "string" ? value.conversationSummary : "",
+    summarizedCount: Number.isInteger(value.summarizedCount) && value.summarizedCount >= 0 ? value.summarizedCount : 0
   };
 }
 
@@ -52,7 +58,7 @@ export function createHistoryStore(filePath) {
     // launch so a new session always starts with a clean conversation.
     async clearMessages() {
       const current = await this.load();
-      return this.save({ ...current, messages: [] });
+      return this.save({ ...current, messages: [], conversationSummary: "", summarizedCount: 0 });
     }
   };
 }

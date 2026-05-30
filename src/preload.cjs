@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld("orbit", {
   setOverlayState: (state) => ipcRenderer.invoke("overlay:set-state", state),
   sendToAI: (payload) => ipcRenderer.invoke("ai:send", payload),
   abortAI: (streamId) => ipcRenderer.invoke("ai:abort", { streamId }),
+  // Conversation memory: summarize older turns + harvest durable user facts.
+  summarizeMemory: (payload) => ipcRenderer.invoke("ai:summarize", payload),
+  getMemory: () => ipcRenderer.invoke("memory:get"),
+  clearMemory: () => ipcRenderer.invoke("memory:clear"),
   // Orbit Cloud license — owned by the main process so the app and overlay
   // share one license and both route through the gateway.
   getCloud: () => ipcRenderer.invoke("cloud:get"),
@@ -42,6 +46,7 @@ contextBridge.exposeInMainWorld("orbit", {
   selectFiles: () => ipcRenderer.invoke("dialog:open-files"),
   getWorkspaceInfo: (workspacePath) => ipcRenderer.invoke("workspace:get-info", workspacePath),
   readWorkspaceFile: (payload) => ipcRenderer.invoke("workspace:read-file", payload),
+  readWorkspaceFiles: (payload) => ipcRenderer.invoke("workspace:read-files", payload),
   searchWorkspace: (payload) => ipcRenderer.invoke("workspace:search", payload),
   writeWorkspaceFile: (payload) => ipcRenderer.invoke("workspace:write-file", payload),
   deleteWorkspaceFile: (payload) => ipcRenderer.invoke("workspace:delete-file", payload),
@@ -57,6 +62,7 @@ contextBridge.exposeInMainWorld("orbit", {
   focusWindow: (payload) => ipcRenderer.invoke("desktop:focus-window", payload),
   waitMs: (payload) => ipcRenderer.invoke("desktop:wait", payload),
   openBrowser: (payload) => ipcRenderer.invoke("desktop:open-browser", payload),
+  openApp: (payload) => ipcRenderer.invoke("desktop:open-app", payload),
   deployAgent: (payload) => ipcRenderer.invoke("workspace:deploy-agent", payload),
   getActiveAgentsCount: () => ipcRenderer.invoke("workspace:get-active-agents-count"),
   listAgentTimeline: (workspacePath) => ipcRenderer.invoke("agent:list-timeline", { workspacePath }),

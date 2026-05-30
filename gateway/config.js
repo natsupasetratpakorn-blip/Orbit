@@ -33,4 +33,4 @@ export const MODEL_IDS = {
   "Voyager 2.1 Preview": "gemini-3.5-flash",
   "Orchestra 1.1": "gemini-2.5-flash-lite"
 };
-export const DEFAULT_MODEL_ID = "gemini-2.5-flash-lite";
+export const DEFAULT_MODEL_ID = "gemini-2.5-flash";

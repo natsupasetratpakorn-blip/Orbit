@@ -1,16 +1,7 @@
 import { parseAIResponse, renderMarkdown, computeLineDiff, parseQuestions } from "../shared/parser.js";
 import { transcribeWithWhisper, warmupWhisper } from "./whisper.js";
-
-const MODELS = [
-  "Auto",
-  "Voyager 1",
-  "Voyager 1 Flash",
-  "Voyager 2",
-  "Voyager 2 Pro",
-  "Voyager 2.1 Preview",
-  "Orchestra 1.1"
-];
-const DEFAULT_MODEL = "Voyager 1";
+import { unsummarizedTail, planSummarization, transcriptFor } from "../shared/memory.js";
+import { DEFAULT_MODEL, MODEL_IDS, MODELS } from "../shared/models.js";
 
 // Element Selectors
 const overlay = document.querySelector("#overlay");
@@ -53,11 +44,21 @@ let chatMessages = [];
 let currentMode = "ask"; // "ask", "agents", "planning"
 let agentMode = false;
 let autoMode = false;
-let attachScreenshot = true;  // default on — screen context is the whole point of Orbit
+let attachScreenshot = true;  // default on — screen context allowed, but only grabbed when the message needs it
+// When true, the very next send captures the screen regardless of the
+// message-needs-screen heuristic (set when the user explicitly asks for screen
+// context). Consumed and reset on each send.
+let forceScreenshotNextSend = false;
 // Inline pasted image (Ctrl+V into the prompt). When non-null, it overrides
 // the auto-screenshot on the next send and is then cleared.
 let pastedImageDataUrl = null;
 let pastedImageThumb = null;
+// Rolling in-session memory. `conversationSummary` compresses turns older than
+// the verbatim window; `summarizedCount` is how many of the oldest messages it
+// already covers. Both persist with the chat history.
+let conversationSummary = "";
+let summarizedCount = 0;
+let summarizing = false;
 
 // ─── Session token & cost tracking ──────────────────────────────────────
 // Pricing in USD per 1M tokens (rough, public Gemini pricing as of 2026).
@@ -70,12 +71,7 @@ const MODEL_PRICING = {
   "gemini-3.1-flash-lite":  { in: 0.10, out: 0.40 }
 };
 const MODEL_TO_VERTEX_ID = {
-  "Voyager 1": "gemini-2.5-flash",
-  "Voyager 1 Flash": "gemini-2.5-flash-lite",
-  "Voyager 2": "gemini-3.1-flash-lite",
-  "Voyager 2 Pro": "gemini-3.5-flash",
-  "Voyager 2.1 Preview": "gemini-2.5-flash",
-  "Orchestra 1.1": "gemini-2.5-flash-lite"
+  ...MODEL_IDS
 };
 let sessionInputTokens = 0;
 let sessionOutputTokens = 0;
@@ -970,7 +966,9 @@ async function persistHistory() {
     autoMode,
     attachScreenshot,
     panelWidthMode,
-    autoSpeakEnabled
+    autoSpeakEnabled,
+    conversationSummary,
+    summarizedCount
   });
 }
 
@@ -1001,6 +999,8 @@ async function loadHistory() {
     attachScreenshot = typeof history?.attachScreenshot === "boolean" ? history.attachScreenshot : true;
     panelWidthMode = history?.panelWidthMode === "wide" ? "wide" : "standard";
     autoSpeakEnabled = typeof history?.autoSpeakEnabled === "boolean" ? history.autoSpeakEnabled : false;
+    conversationSummary = typeof history?.conversationSummary === "string" ? history.conversationSummary : "";
+    summarizedCount = Number.isInteger(history?.summarizedCount) && history.summarizedCount >= 0 ? history.summarizedCount : 0;
 
     if (modelSelectBtn) {
       const textSpan = modelSelectBtn.querySelector("span");
@@ -1277,10 +1277,12 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "list" :
     part.type === "wait_ms" ? "read" :
     part.type === "open_browser" ? "browser" :
+    part.type === "open_app" ? "browser" :
     part.type === "delete_file" ? "write" :
     part.type === "move_file" ? "write" :
     part.type === "create_directory" ? "write" :
     part.type === "list_dir" ? "list" :
+    part.type === "read_files" ? "read" :
     part.type === "git_status" || part.type === "git_diff" || part.type === "git_log" ? "command" :
     part.type === "deploy_agent" ? "agent" : "read";
   const typeLabel =
@@ -1295,6 +1297,7 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "Focus Window" :
     part.type === "wait_ms" ? "Wait" :
     part.type === "open_browser" ? "Open Browser" :
+    part.type === "open_app" ? "Open App" :
     part.type === "list_dir" ? "List Directory" :
     part.type === "delete_file" ? "Delete File" :
     part.type === "move_file" ? "Move File" :
@@ -1303,6 +1306,7 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "git_diff" ? "Git Diff" :
     part.type === "git_log" ? "Git Log" :
     part.type === "deploy_agent" ? "Deploy Agent" :
+    part.type === "read_files" ? "Read Files" :
     part.type === "read_file" && part.start != null ? `Read File :${part.start}-${part.end}` : "Read File";
 
   const typeSpan = document.createElement("span");
@@ -1312,12 +1316,14 @@ function renderActionCard(part, messageId, partIndex) {
   const pathSpan = document.createElement("span");
   pathSpan.className = "action-card-path";
   pathSpan.textContent =
+    part.type === "read_files" ? (part.glob ? part.glob : `${(part.paths || []).length} files`) :
     part.type === "click_pixel" ? `x=${part.x}, y=${part.y}` :
     part.type === "scroll" ? `x=${part.x}, y=${part.y}, ticks=${part.ticks}` :
     part.type === "keystroke" ? part.content || "" :
     part.type === "focus_window" ? `"${part.window || ""}"` :
     part.type === "wait_ms" ? `${part.ms}ms` :
     part.type === "open_browser" ? part.url :
+    part.type === "open_app" ? `${part.name}${part.args ? ` ${part.args}` : ""}` :
     part.type === "list_windows" ? "Active Application Windows" :
     part.type === "deploy_agent" ? "Autonomous Background Agent" :
     part.type === "move_file" ? `${part.from} → ${part.to}` :
@@ -2025,6 +2031,38 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Read failed" };
       toolResult = `[TOOL_RESULT] read_file FAILED: ${part.path} — ${res?.error || "Read failed"}`;
     }
+  } else if (part.type === "read_files") {
+    const res = await window.orbit.readWorkspaceFiles({
+      workspacePath,
+      paths: part.paths || [],
+      glob: part.glob || ""
+    });
+    if (res && res.ok) {
+      const blocks = [];
+      let okCount = 0;
+      let errCount = 0;
+      for (const f of res.files) {
+        if (f.error) {
+          errCount++;
+          blocks.push(`--- FILE: ${f.path} (ERROR: ${f.error}) ---`);
+        } else {
+          okCount++;
+          const note = f.truncatedFile ? " (truncated — byte budget)" : "";
+          blocks.push(`--- FILE: ${f.path}${note} ---\n${f.content}`);
+        }
+      }
+      const notes = [];
+      if (res.fileCapped) notes.push("more files matched than the cap; narrow the glob to get the rest");
+      if (res.bytesTruncated) notes.push("output trimmed at the context byte budget");
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", fileCount: okCount };
+      toolResult =
+        `[TOOL_RESULT] read_files: ${okCount} file(s) read${errCount ? `, ${errCount} failed` : ""}` +
+        `${notes.length ? ` [${notes.join("; ")}]` : ""}\n` +
+        `--- BATCH READ START ---\n${blocks.join("\n\n")}\n--- BATCH READ END ---`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Batch read failed" };
+      toolResult = `[TOOL_RESULT] read_files FAILED: ${res?.error || "Batch read failed"}`;
+    }
   } else if (part.type === "list_dir") {
     try {
       const info = await window.orbit.getWorkspaceInfo(workspacePath);
@@ -2188,6 +2226,15 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to open browser" };
       toolResult = `[TOOL_RESULT] open_browser FAILED: ${res?.error || "Failed to open browser"}`;
     }
+  } else if (part.type === "open_app") {
+    const res = await window.orbit.openApp({ name: part.name, args: part.args });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] open_app: Launched "${part.name}" successfully.`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to open app" };
+      toolResult = `[TOOL_RESULT] open_app FAILED: ${res?.error || "Failed to launch application"}`;
+    }
   } else if (part.type === "list_windows") {
     try {
       const res = await window.orbit.listWindows();
@@ -2330,9 +2377,10 @@ async function sendToolResult(toolResultText) {
   chatMessages = [...chatMessages, userMessage, pendingMessage];
   renderMessages();
 
-  const apiMessages = chatMessages
+  const cleanMessages = chatMessages
     .filter((m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim())
     .map((m) => ({ role: m.role, content: m.content }));
+  const apiMessages = unsummarizedTail(cleanMessages, summarizedCount);
 
   const result = await callAIStreaming(apiMessages, null, pendingId);
 
@@ -2421,7 +2469,8 @@ async function callAIStreaming(apiMessages, screenshotPath, pendingId) {
       agentMode,
       streamId,
       workspaceContext: buildWorkspaceContext(),
-      mode: currentMode
+      mode: currentMode,
+      conversationSummary
     });
   } catch (error) {
     result = { ok: false, error: error?.message || String(error) };
@@ -2948,6 +2997,25 @@ function renderMessages() {
   }
 }
 
+// Decide whether a message actually needs a screen grab. Screen context is
+// ambient — most questions (math, definitions, coding, writing) don't need it.
+// We only auto-capture when the user's wording points at what's on screen, so
+// general questions aren't answered as "that text isn't in the screenshot".
+function messageNeedsScreen(text) {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  // Explicit screen/desktop references — always capture.
+  if (/\b(my screen|on screen|on-screen|the screen|my desktop|this screenshot|the screenshot|what app|which app|what window|currently (open|showing|on|displayed))\b/.test(t)) {
+    return true;
+  }
+  // Deictic pointer ("this/that/here/it") combined with a verb/noun that only
+  // makes sense relative to something visible ("fix this error", "what does
+  // this say", "solve this", "translate this", "explain this code").
+  const hasDeictic = /\b(this|that|these|those|here)\b/.test(t);
+  const hasVisualRef = /\b(screen|error|bug|code|page|window|line|function|image|picture|diagram|question|problem|highlighted|selected|above|below|shown|displayed|says?|see|look|read|solve|translate|summari[sz]e?|explain|fix|describe|what'?s)\b/.test(t);
+  return hasDeictic && hasVisualRef;
+}
+
 // Send Chat Message
 async function sendMessage(content) {
   closeModelDropdown();
@@ -2994,13 +3062,18 @@ async function sendMessage(content) {
     pastedImageDataUrl = null;
     pastedImageThumb = null;
     renderContextTray();
-  } else if (attachScreenshot) {
+  } else if (attachScreenshot && (forceScreenshotNextSend || messageNeedsScreen(trimmed))) {
+    // Only grab the screen when the toggle is on AND the message actually
+    // refers to what's visible (or the user forced it for this send). This
+    // keeps general questions from being answered against the screenshot.
     try {
       screenshotPath = await window.orbit.captureScreen();
     } catch {
       screenshotPath = null;
     }
   }
+  // One-shot force flag is consumed by every send regardless of outcome.
+  forceScreenshotNextSend = false;
 
   // Create message bubbles
   const userMessage = {
@@ -3033,10 +3106,14 @@ async function sendMessage(content) {
   renderMessages();
   setOverlayState("expanded");
 
-  // Retrieve clean API conversation thread
-  const apiMessages = chatMessages
+  // Retrieve clean API conversation thread. Older turns are represented by
+  // conversationSummary (injected into the system prompt), so we only send the
+  // verbatim tail that the summary doesn't yet cover. This keeps context small
+  // while the model still "remembers" far-back turns via the summary.
+  const cleanMessages = chatMessages
     .filter((m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim())
     .map((m) => ({ role: m.role, content: m.content }));
+  const apiMessages = unsummarizedTail(cleanMessages, summarizedCount);
 
   // Attach workspace code context to the last message payload
   if (contextText && apiMessages.length > 0) {
@@ -3087,9 +3164,48 @@ async function sendMessage(content) {
       try { speakText(result.content); } catch (e) { console.warn("speakText failed:", e); }
     }
     try { await persistHistory(); } catch (e) { console.warn("persistHistory failed:", e); }
+    // Fire-and-forget: fold any turns that scrolled past the verbatim window
+    // into the rolling summary so the next request stays small. Runs after the
+    // reply is already shown, so it never adds latency to this turn.
+    maybeSummarizeOlderTurns();
   } finally {
     // ALWAYS re-enable, even if something above threw.
     resetInputState();
+  }
+}
+
+// When the conversation outgrows the verbatim window, compress the overflow
+// into conversationSummary (and harvest durable user facts) via a cheap model
+// call in the main process. Guarded so only one summarization runs at a time.
+async function maybeSummarizeOlderTurns() {
+  if (summarizing) return;
+  const clean = chatMessages
+    .filter((m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim())
+    .map((m) => ({ role: m.role, content: m.content }));
+  const plan = planSummarization(clean.length, summarizedCount);
+  if (!plan.shouldSummarize) return;
+
+  summarizing = true;
+  try {
+    const slice = clean.slice(plan.fromIndex, plan.toIndex);
+    const res = await window.orbit.summarizeMemory({
+      priorSummary: conversationSummary,
+      transcript: transcriptFor(slice)
+    });
+    // Guard against the chat being cleared/reset while the call was in flight:
+    // only apply if the conversation is still at least as long as what we summarized.
+    const currentLen = chatMessages.filter(
+      (m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim()
+    ).length;
+    if (res?.ok && typeof res.summary === "string" && plan.newSummarizedCount <= currentLen) {
+      conversationSummary = res.summary;
+      summarizedCount = plan.newSummarizedCount;
+      try { await persistHistory(); } catch (e) { console.warn("persistHistory (summary) failed:", e); }
+    }
+  } catch (e) {
+    console.warn("summarizeMemory failed:", e);
+  } finally {
+    summarizing = false;
   }
 }
 
@@ -3120,7 +3236,7 @@ function updateAutoModeUI() {
 function updateScreenshotToggleUI() {
   if (attachScreenshot) {
     screenshotToggleButton.classList.add("is-active");
-    screenshotToggleButton.title = "Screen context ON — screenshot attached to each message";
+    screenshotToggleButton.title = "Screen context ON — your screen is attached only when your message refers to it";
   } else {
     screenshotToggleButton.classList.remove("is-active");
     screenshotToggleButton.title = "Screen context OFF — messages sent without screenshot";
@@ -3309,9 +3425,12 @@ document.addEventListener("click", () => {
 // Screenshot Attachment Toggle
 screenshotToggleButton.addEventListener("click", async () => {
   attachScreenshot = !attachScreenshot;
+  // Turning it on is an explicit "look at my screen" signal — force a grab on
+  // the next send even if the message doesn't obviously reference the screen.
+  forceScreenshotNextSend = attachScreenshot;
   updateScreenshotToggleUI();
   updatePanelSubtitle();
-  toast(attachScreenshot ? "Screen context on" : "Screen context off");
+  toast(attachScreenshot ? "Screen context on — next message includes your screen" : "Screen context off");
   await persistHistory();
   resetInputState();
   promptInput.focus();
@@ -3375,6 +3494,8 @@ async function reloadHistoryForWorkspace(newPath) {
   try {
     const history = await window.orbit.loadHistory(newPath);
     chatMessages = Array.isArray(history?.messages) ? history.messages : [];
+    conversationSummary = typeof history?.conversationSummary === "string" ? history.conversationSummary : "";
+    summarizedCount = Number.isInteger(history?.summarizedCount) && history.summarizedCount >= 0 ? history.summarizedCount : 0;
     cardExecutionStates = {};
     renderMessages();
   } catch (err) {
@@ -3480,6 +3601,8 @@ clearHistoryButton.addEventListener("click", async () => {
   if (proceed) {
     chatMessages = [];
     cardExecutionStates = {};
+    conversationSummary = "";
+    summarizedCount = 0;
     renderMessages();
     await persistHistory();
     toast("Chat history cleared");
@@ -3929,6 +4052,8 @@ async function executeSlashCommand(cmd) {
     if (proceed) {
       chatMessages = [];
       cardExecutionStates = {};
+      conversationSummary = "";
+      summarizedCount = 0;
       renderMessages();
       await persistHistory();
       toast("Chat history cleared", { variant: "success" });
@@ -3976,10 +4101,11 @@ async function executeSlashCommand(cmd) {
     }
   } else if (c === "/screenshot") {
     attachScreenshot = !attachScreenshot;
+    forceScreenshotNextSend = attachScreenshot;
     updateScreenshotToggleUI();
     updatePanelSubtitle();
     await persistHistory();
-    toast(attachScreenshot ? "Screenshot attached to messages" : "Screenshot detached", { variant: "success" });
+    toast(attachScreenshot ? "Screen context on — next message includes your screen" : "Screen context off", { variant: "success" });
   } else if (c === "/ask" || c === "/agents" || c === "/planning") {
     currentMode = c.slice(1);
     agentMode = (currentMode === "agents");

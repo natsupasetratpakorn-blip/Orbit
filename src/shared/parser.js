@@ -165,7 +165,15 @@ const EXTENDED_TOOLS_RE = new RegExp(
     // <git_diff /> or <git_diff path="..." />
     `<(?<git_diff>git_diff)(?:\\s+path="(?<gd_path>[^"]+)")?\\s*/>`,
     // <git_log /> or <git_log count="N" />
-    `<(?<git_log>git_log)(?:\\s+count="(?<gl_count>\\d+)")?\\s*/>`
+    `<(?<git_log>git_log)(?:\\s+count="(?<gl_count>\\d+)")?\\s*/>`,
+    // <open_app name="Spotify" args="..." /> (aliases launch_app, open_application,
+    // start_app) — launch a desktop application by name/path. `args` optional.
+    `<(?:open_app|launch_app|open_application|start_app)\\s+name="(?<app_name>[^"]+)"(?:\\s+args="(?<app_args>[^"]*)")?\\s*/>`,
+    // <read_files glob="src/**/*.js" /> — batch-read every file matching a glob.
+    `<(?:read_files|read_many)\\s+glob="(?<rfs_glob>[^"]+)"\\s*/>`,
+    // <read_files>path1\npath2\n...</read_files> — batch-read an explicit list
+    // (newline- or comma-separated). One tool call, parallel read, one result.
+    `<(?:read_files|read_many)\\s*>(?<rfs_body>[\\s\\S]*?)</(?:read_files|read_many)>`
   ].join("|"),
   "gs"
 );
@@ -196,6 +204,13 @@ export function parseExtendedTools(text) {
       out.push({ type: "git_diff", path: g.gd_path || undefined });
     } else if (g.git_log) {
       out.push({ type: "git_log", count: g.gl_count ? parseInt(g.gl_count, 10) : undefined });
+    } else if (g.app_name) {
+      out.push({ type: "open_app", name: g.app_name, args: g.app_args || "" });
+    } else if (g.rfs_glob) {
+      out.push({ type: "read_files", glob: g.rfs_glob, paths: [] });
+    } else if (g.rfs_body !== undefined) {
+      const paths = g.rfs_body.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+      out.push({ type: "read_files", glob: "", paths });
     }
     lastIndex = EXTENDED_TOOLS_RE.lastIndex;
   }

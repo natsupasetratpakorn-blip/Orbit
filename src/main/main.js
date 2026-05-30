@@ -10,7 +10,8 @@ import { createHash } from "node:crypto";
 
 import { createHistoryStore } from "../shared/history-store.js";
 import { getOverlayBounds } from "../shared/overlay-window.js";
-import { sendToModel, transcribeAudioGCP } from "../shared/ai-service.js";
+import { sendToModel, transcribeAudioGCP, summarizeForMemory } from "../shared/ai-service.js";
+import { mergeUserFacts } from "../shared/memory.js";
 import { createTimelineSnapshot, isAllowedExternalUrl, normalizeWorkspaceRoot, resolveInsideWorkspace } from "../shared/workspace-security.js";
 import { GATEWAY_URL } from "../shared/cloud-config.js";
 
@@ -39,6 +40,22 @@ function loadCloudConfig() {
 function saveCloudConfig() {
   try { writeFileSync(cloudConfigPath(), JSON.stringify(cloudConfig)); }
   catch (e) { console.warn("cloud config save failed:", e.message); }
+}
+
+// Cross-session user memory: durable facts about the user that persist between
+// conversations (and across app restarts), injected into every AI request. Kept
+// in the main process so both the app and overlay share one source of truth.
+let userMemory = { facts: [] };
+function userMemoryPath() { return join(app.getPath("userData"), "user-memory.json"); }
+function loadUserMemory() {
+  try {
+    const parsed = JSON.parse(readFileSync(userMemoryPath(), "utf8"));
+    userMemory = { facts: Array.isArray(parsed.facts) ? parsed.facts : [] };
+  } catch { userMemory = { facts: [] }; }
+}
+function saveUserMemory() {
+  try { writeFileSync(userMemoryPath(), JSON.stringify(userMemory)); }
+  catch (e) { console.warn("user memory save failed:", e.message); }
 }
 // Orbit opens in the full standalone app ("mission-control") by default; users
 // can switch to the floating overlay via the in-app toggle or the tray.
@@ -216,6 +233,49 @@ async function listFilesSafe(dir, baseDir, fileList = [], depth = 0) {
     // Ignore inaccessible files/folders
   }
   return fileList;
+}
+
+// Translate a simple glob ("src/**/*.js", "*.md", "**/app.js", "{a,b}.css")
+// into a RegExp matched against forward-slash relative paths. Supports **, *,
+// ?, and {a,b} alternation — enough for "read everything matching" requests.
+function globToRegExp(glob) {
+  let re = "";
+  const g = String(glob).replace(/\\/g, "/");
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === "*") {
+      if (g[i + 1] === "*") {
+        // ** matches across path separators; consume an optional trailing slash.
+        re += ".*";
+        i++;
+        if (g[i + 1] === "/") i++;
+      } else {
+        re += "[^/]*"; // * stays within a path segment
+      }
+    } else if (c === "?") re += "[^/]";
+    else if (c === "{") re += "(";
+    else if (c === "}") re += ")";
+    else if (c === ",") re += "|";
+    else if (".+^$()|[]\\".includes(c)) re += "\\" + c;
+    else re += c;
+  }
+  return new RegExp(`^${re}$`, "i");
+}
+
+// Run an async mapper over items with a bounded concurrency so a batch read of
+// hundreds of files doesn't exhaust file handles. Preserves input order.
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) break;
+      results[i] = await mapper(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function getPrimaryDisplayWidth() {
@@ -869,11 +929,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("ai:send", async (event, payload) => {
-    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset } = payload ?? {};
+    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset, conversationSummary } = payload ?? {};
     // License is owned by the main process, not the caller — so the app and the
     // overlay both route through the gateway with the same key. No key → direct.
     const licenseKey = cloudConfig.licenseKey;
     const gatewayUrl = licenseKey ? GATEWAY_URL : "";
+    // Memory = durable cross-session user facts (owned here) + the running
+    // summary of older turns in this conversation (owned by the caller).
+    const memory = { userFacts: userMemory.facts, conversationSummary: conversationSummary || "" };
     const { imageBase64, mimeType } = await loadScreenshotBase64(screenshotPath);
     const { parts: attachmentParts, text: attachmentText } = await loadAttachmentParts(attachments);
 
@@ -900,7 +963,7 @@ function registerIpc() {
       const reply = await sendToModel({
         model, messages, imageBase64, mimeType,
         attachmentParts, attachmentText,
-        agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset,
+        agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset, memory,
         gatewayUrl, licenseKey,
         abortSignal: controller.signal
       });
@@ -924,6 +987,40 @@ function registerIpc() {
       return { ok: true };
     }
     return { ok: false, error: "no-active-stream" };
+  });
+
+  // Fold older conversation turns into a running summary and harvest durable
+  // user facts. The renderer calls this in the background after a turn once the
+  // transcript outgrows its verbatim window. Returns the updated summary plus
+  // the merged cross-session facts (also persisted here).
+  ipcMain.handle("ai:summarize", async (_event, payload) => {
+    const { priorSummary, transcript } = payload ?? {};
+    const licenseKey = cloudConfig.licenseKey;
+    const gatewayUrl = licenseKey ? GATEWAY_URL : "";
+    try {
+      const { summary, facts } = await summarizeForMemory({
+        priorSummary: priorSummary || "",
+        transcript: transcript || "",
+        gatewayUrl,
+        licenseKey
+      });
+      if (facts && facts.length > 0) {
+        userMemory.facts = mergeUserFacts(userMemory.facts, facts);
+        saveUserMemory();
+      }
+      return { ok: true, summary, userFacts: userMemory.facts };
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error) };
+    }
+  });
+
+  // Read / clear the durable cross-session user memory (for a settings panel or
+  // a "forget me" action).
+  ipcMain.handle("memory:get", () => ({ facts: userMemory.facts }));
+  ipcMain.handle("memory:clear", () => {
+    userMemory = { facts: [] };
+    saveUserMemory();
+    return { ok: true };
   });
 
   ipcMain.handle("ai:transcribe", async (_event, payload) => {
@@ -1014,6 +1111,89 @@ function registerIpc() {
     }
   });
 
+  // Batch read: pull MANY files in one IPC call, reading them in parallel. This
+  // collapses what used to be N model round-trips (one <read_file> per turn)
+  // into a single tool call, so the model can ingest a whole project in seconds.
+  // Accepts an explicit `paths` list and/or a `glob` ("src/**/*.js"). Capped on
+  // both file count and total bytes so a huge tree can't blow the context.
+  ipcMain.handle("workspace:read-files", async (_event, { workspacePath, paths, glob, maxFiles, maxBytes } = {}) => {
+    const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
+    if (!root) {
+      return { ok: false, error: "No workspace is open. Click the folder icon and select a project first." };
+    }
+    const FILE_CAP = Math.min(Math.max(parseInt(maxFiles, 10) || 80, 1), 300);
+    const BYTE_CAP = Math.min(Math.max(parseInt(maxBytes, 10) || 500 * 1024, 1024), 4 * 1024 * 1024);
+
+    // Resolve the target list: a glob is expanded against the workspace tree
+    // (reusing the same exclusion rules as search/list); explicit paths are
+    // de-duped and taken as-is.
+    let list = [];
+    let globTotal = 0;
+    try {
+      if (glob && String(glob).trim()) {
+        const re = globToRegExp(String(glob).trim());
+        const all = await listFilesSafe(root, root);
+        const matched = all.map((f) => f.path).filter((p) => re.test(p));
+        globTotal = matched.length;
+        list = matched.slice(0, FILE_CAP);
+      } else {
+        const seen = new Set();
+        for (const p of Array.isArray(paths) ? paths : []) {
+          const rel = String(p || "").trim();
+          if (!rel || seen.has(rel)) continue;
+          seen.add(rel);
+          list.push(rel);
+          if (list.length >= FILE_CAP) break;
+        }
+      }
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    if (list.length === 0) {
+      return { ok: false, error: glob ? `No files matched glob "${glob}".` : "No file paths provided." };
+    }
+
+    const read = await mapWithConcurrency(list, 16, async (rel) => {
+      try {
+        const target = resolveInsideWorkspace(root, rel);
+        const content = await readFile(target.fullPath, "utf8");
+        return { path: rel, content };
+      } catch (error) {
+        return { path: rel, error: error.message };
+      }
+    });
+
+    // Enforce the total byte budget across all files, trimming the tail file
+    // that crosses it and dropping any files entirely beyond the budget.
+    let total = 0;
+    let bytesTruncated = false;
+    const files = [];
+    for (const r of read) {
+      if (r.error) { files.push(r); continue; }
+      if (total >= BYTE_CAP) { bytesTruncated = true; files.push({ path: r.path, error: "omitted — context byte budget reached" }); continue; }
+      const remaining = BYTE_CAP - total;
+      if (r.content.length > remaining) {
+        files.push({ path: r.path, content: r.content.slice(0, remaining), truncatedFile: true });
+        total = BYTE_CAP;
+        bytesTruncated = true;
+      } else {
+        files.push(r);
+        total += r.content.length;
+      }
+    }
+
+    return {
+      ok: true,
+      files,
+      requested: list.length,
+      // For globs, how many matched beyond the file cap (so the model knows
+      // there's more it didn't get).
+      fileCapped: glob ? globTotal > FILE_CAP : false,
+      bytesTruncated,
+      bytes: total
+    };
+  });
+
   // Grep-style search across the open workspace. Used by the model to locate
   // symbols/strings/imports without burning round-trips on read_file. Reuses
   // listFilesSafe so the same exclusion list (node_modules, dist, dotdirs,
@@ -1040,27 +1220,32 @@ function registerIpc() {
 
     try {
       const files = await listFilesSafe(root, root);
+      // Read all candidate files in parallel (bounded), then scan. The old
+      // serial read-one-then-scan loop was the slow part on big trees.
+      const contents = await mapWithConcurrency(files, 16, async (f) => {
+        try {
+          const target = resolveInsideWorkspace(root, f.path);
+          return { path: f.path, content: await readFile(target.fullPath, "utf8") };
+        } catch {
+          return null;
+        }
+      });
+
       const results = [];
       let scanned = 0;
       let truncated = false;
-      for (const f of files) {
+      for (const entry of contents) {
+        if (!entry) continue;
         if (results.length >= limit) { truncated = true; break; }
-        let content;
-        try {
-          const target = resolveInsideWorkspace(root, f.path);
-          content = await readFile(target.fullPath, "utf8");
-        } catch {
-          continue;
-        }
         scanned++;
-        const lines = content.split(/\r?\n/);
+        const lines = entry.content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           const hay = caseSensitive ? line : line.toLowerCase();
           const hit = matcher ? matcher.test(line) : hay.includes(needle);
           if (hit) {
             results.push({
-              path: f.path,
+              path: entry.path,
               line: i + 1,
               text: line.length > 240 ? line.slice(0, 240) + "…" : line
             });
@@ -1453,6 +1638,75 @@ function registerIpc() {
     }
   });
 
+  // Launch a desktop application by friendly name or full path. Tries three
+  // strategies in order so both classic desktop apps AND Store/UWP apps (like
+  // Spotify, which isn't on PATH) launch from a plain name:
+  //   1. Start-Process — resolves PATH, the App Paths registry, full paths,
+  //      and URI schemes (chrome, code, notepad, ms-settings:, …).
+  //   2. Get-StartApps — the Start menu, which lists Store + desktop apps by
+  //      the exact name the user sees; launched via shell:AppsFolder\<AUMID>.
+  //   3. URI protocol — many Store apps register one (spotify:, …).
+  // `args` is an optional string of command-line arguments (strategy 1 only).
+  ipcMain.handle("desktop:open-app", async (_event, { name, args } = {}) => {
+    const target = String(name || "").trim();
+    if (!target) return { ok: false, error: "No application name provided." };
+
+    // Friendly aliases → what Windows actually launches. Anything not listed
+    // falls through to the name itself (then to the Start-menu lookup).
+    const ALIASES = {
+      "chrome": "chrome", "google chrome": "chrome", "google": "chrome",
+      "edge": "msedge", "microsoft edge": "msedge",
+      "firefox": "firefox",
+      "spotify": "spotify", "discord": "discord", "slack": "slack",
+      "vscode": "code", "vs code": "code", "visual studio code": "code", "code": "code",
+      "notepad": "notepad", "notepad++": "notepad++",
+      "calculator": "calc", "calc": "calc",
+      "paint": "mspaint", "mspaint": "mspaint",
+      "explorer": "explorer", "file explorer": "explorer",
+      "terminal": "wt", "windows terminal": "wt",
+      "cmd": "cmd", "command prompt": "cmd",
+      "powershell": "powershell",
+      "word": "winword", "excel": "excel", "powerpoint": "powerpnt", "outlook": "outlook",
+      "task manager": "taskmgr", "settings": "ms-settings:"
+    };
+    const resolved = ALIASES[target.toLowerCase()] || target;
+
+    // PowerShell single-quote escaping (double any embedded quote).
+    const ps = (s) => String(s).replace(/'/g, "''");
+    const isUri = resolved.endsWith(":") || /^[a-z][a-z0-9+.-]*:/i.test(resolved);
+    const argList = args && String(args).trim() ? String(args).trim() : "";
+
+    // Strategy 1 — direct launch. URIs go through the shell (no -FilePath).
+    const directCmd = isUri
+      ? `Start-Process '${ps(resolved)}'`
+      : `Start-Process -FilePath '${ps(resolved)}'${argList ? ` -ArgumentList '${ps(argList)}'` : ""}`;
+
+    // The Start-menu lookup matches the user's name (not the resolved alias),
+    // so "Spotify" finds the Store app even though the alias is also "spotify".
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `try { ${directCmd}; 'ORBIT_OK direct'; exit 0 } catch {}`,
+      "try {",
+      "  $apps = Get-StartApps -ErrorAction Stop",
+      `  $q = '${ps(target)}'`,
+      "  $m = $apps | Where-Object { $_.Name -ieq $q } | Select-Object -First 1",
+      "  if (-not $m) { $m = $apps | Where-Object { $_.Name -ilike \"*$q*\" } | Select-Object -First 1 }",
+      "  if ($m) { Start-Process ('shell:AppsFolder\\' + $m.AppID); 'ORBIT_OK start:' + $m.Name; exit 0 }",
+      "} catch {}",
+      `try { Start-Process '${ps(resolved)}:'; 'ORBIT_OK proto'; exit 0 } catch {}`,
+      `throw \"No application matching '${ps(target)}' was found.\"`
+    ].join("\n");
+
+    const result = await runPowerShell(script);
+    if (result.ok && /ORBIT_OK/.test(result.stdout || "")) {
+      console.log(`[Orbit OpenApp] launched "${target}" via ${(result.stdout.match(/ORBIT_OK (\S+)/) || [])[1] || "?"}`);
+      return { ok: true, launched: resolved };
+    }
+    const msg = (result.stderr || result.error || "").trim() || "Failed to launch application";
+    console.warn(`[Orbit OpenApp] failed to launch "${target}": ${msg}`);
+    return { ok: false, error: `Could not launch "${target}". ${msg}` };
+  });
+
   // Deploy an autonomous background agent runner.
   ipcMain.handle("workspace:deploy-agent", async (_event, { workspacePath, task, model }) => {
     const root = normalizeWorkspaceRoot(workspacePath || activeWorkspacePath);
@@ -1809,14 +2063,13 @@ app.whenReady().then(async () => {
   });
 
   historyStore = createHistoryStore(join(app.getPath("userData"), "chat-history.json"));
-  // Reset conversation history on every launch (preferences are preserved).
-  // This guarantees a fresh session each time the user closes and reopens the
-  // overlay/app, and sidesteps stale tool-approval cards re-rendering from a
-  // persisted transcript.
-  await resetHistoryOnStartup();
+  // Conversation history is intentionally persistent. Renderers sanitize stale
+  // pending/streaming placeholders when they load, but completed chats and their
+  // rolling summaries must survive app restarts.
   windowStateStorePath = join(app.getPath("userData"), "window-state.json");
   savedWindowState = await loadSavedWindowState();
   loadCloudConfig();
+  loadUserMemory();
   registerIpc();
   createOverlayWindow();
   createSystemTray();

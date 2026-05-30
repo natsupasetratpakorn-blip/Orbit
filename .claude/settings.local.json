@@ -38,7 +38,14 @@
       "PowerShell(npm *)",
       "PowerShell(Get-Command *)",
       "PowerShell(npx electron build/make-icon.js)",
-      "Bash(npx electron *)"
+      "Bash(npx electron *)",
+      "PowerShell(npm run *)",
+      "Bash(npx vitest *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"exit $?\")",
+      "Bash(echo \"exit=$?\")",
+      "PowerShell(git --no-pager log --oneline -3; \"==== HEAD~1 body ====\"; git --no-pager show -s --format=%B HEAD~1)",
+      "PowerShell(git *)"
     ]
   }
 }

@@ -4,16 +4,17 @@ import {
   createNewChat,
   getActiveChat,
   getActiveProject,
-  selectProject
+  selectProject,
+  updateActiveChatMemory
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
-import { PRESETS, DEFAULT_PRESET, normalizePreset, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
+import { unsummarizedTail, planSummarization, transcriptFor } from "../shared/memory.js";
+import { PRESETS, DEFAULT_PRESET, DEFAULT_MODEL, normalizePreset, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
 import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
 import { GATEWAY_URL } from "../shared/cloud-config.js";
 
 // ─── Persistence ─────────────────────────────────────────────────────────
 const STORAGE_KEY = "orbit.antigravity.workspace";
-const DEFAULT_MODEL = "Voyager 1";
 // The Orbit Cloud gateway URL is shared with the main process (and overlay) via
 // cloud-config.js. Customers only paste a license key; the main process owns
 // the key. Leave it blank to use direct gcloud (dev mode).
@@ -100,6 +101,7 @@ let audioChunks = [];
 let streaming = false;
 let streamingMessageId = null;
 let currentStreamId = null; // active AI stream id, used to abort/stop mid-stream
+let summarizing = false;
 // Autonomous tool loop guard. Each fresh user turn resets the counter; the
 // auto-fire → tool → AI → re-render loop increments it and stops at the cap so
 // a model that keeps emitting tools can't run forever (and burn cost).
@@ -110,14 +112,7 @@ function loadState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (parsed?.projects?.length) {
-      parsed.projects = parsed.projects.map((p) => ({
-        ...p,
-        files: Array.isArray(p.files) ? p.files : [],
-        workspacePath: typeof p.workspacePath === "string" ? p.workspacePath : ""
-      }));
-      // Reset conversation history on every launch — keep projects, files,
-      // and preferences, but start each session with a single empty chat.
-      return resetConversations(parsed);
+      return normalizePersistedState(parsed);
     }
   } catch { /* fall through */ }
   const def = createDefaultOrbitState();
@@ -125,19 +120,55 @@ function loadState() {
   return def;
 }
 
-// Collapse every project's conversations down to one fresh, empty chat so the
-// transcript doesn't carry over between launches. Projects, attached files, and
-// workspace paths are preserved.
-function resetConversations(s) {
+function normalizePersistedChat(chat, fallbackTitle = "New Conversation") {
   const now = new Date().toISOString();
-  s.projects = (s.projects || []).map((p) => {
-    const chat = { id: crypto.randomUUID(), title: "New Conversation", createdAt: now, messages: [] };
-    return { ...p, chats: [chat] };
+  const messages = (Array.isArray(chat?.messages) ? chat.messages : [])
+    .filter((m) => m && !m.pending && !m.streaming);
+  const summarizedCount = Number.isInteger(chat?.summarizedCount) && chat.summarizedCount >= 0
+    ? Math.min(chat.summarizedCount, messages.length)
+    : 0;
+  return {
+    ...chat,
+    id: typeof chat?.id === "string" && chat.id ? chat.id : crypto.randomUUID(),
+    title: typeof chat?.title === "string" && chat.title ? chat.title : fallbackTitle,
+    createdAt: typeof chat?.createdAt === "string" ? chat.createdAt : now,
+    messages,
+    conversationSummary: typeof chat?.conversationSummary === "string" ? chat.conversationSummary : "",
+    summarizedCount
+  };
+}
+
+function normalizePersistedState(s) {
+  const projects = (s.projects || []).map((p, idx) => {
+    const chats = Array.isArray(p.chats) && p.chats.length
+      ? p.chats.map((chat) => normalizePersistedChat(chat))
+      : [normalizePersistedChat(null)];
+    return {
+      ...p,
+      id: typeof p.id === "string" && p.id ? p.id : `project-${idx}-${crypto.randomUUID()}`,
+      name: typeof p.name === "string" && p.name ? p.name : "Untitled Project",
+      files: Array.isArray(p.files) ? p.files : [],
+      workspacePath: typeof p.workspacePath === "string" ? p.workspacePath : "",
+      chats
+    };
   });
-  const first = s.projects[0];
-  s.activeProjectId = first?.id ?? s.activeProjectId ?? null;
-  s.activeChatId = first?.chats[0]?.id ?? null;
-  return s;
+  const activeProject = projects.find((p) => p.id === s.activeProjectId) || projects[0];
+  const activeChat = activeProject?.chats.find((c) => c.id === s.activeChatId) || activeProject?.chats.at(-1);
+  return {
+    ...s,
+    projects,
+    activeProjectId: activeProject?.id ?? null,
+    activeChatId: activeChat?.id ?? null
+  };
+}
+
+function createEmptyChat(title = "New Conversation", createdAt = new Date().toISOString()) {
+  return normalizePersistedChat({
+    id: crypto.randomUUID(),
+    title,
+    createdAt,
+    messages: []
+  }, title);
 }
 
 function persistState() {
@@ -1190,7 +1221,16 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   }
 
   const activeChat = getActiveChat(state);
-  const cleanMessages = activeChat.messages.filter((m) => !m.streaming);
+  const cleanMessages = (activeChat?.messages ?? [])
+    .filter((m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim())
+    .map((m) => ({ role: m.role, content: m.content }));
+  const summarizedCount = Number.isInteger(activeChat?.summarizedCount) && activeChat.summarizedCount >= 0
+    ? activeChat.summarizedCount
+    : 0;
+  const conversationSummary = typeof activeChat?.conversationSummary === "string"
+    ? activeChat.conversationSummary
+    : "";
+  const apiMessages = unsummarizedTail(cleanMessages, summarizedCount);
 
   let finalText = "";
   let stopped = false;
@@ -1200,13 +1240,14 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
     const response = await window.orbit?.sendToAI?.({
       streamId,
       model: selectedModel,
-      messages: cleanMessages,
+      messages: apiMessages,
       screenshotPath,
       attachments: attachmentsForThisTurn.map((a) => a.path),
       workspaceContext,
       agentMode: currentMode === "agents",
       mode: currentMode,
       preset: selectedPreset,
+      conversationSummary,
       gatewayUrl: gatewayActive() ? GATEWAY_URL : "",
       licenseKey: cloud.licenseKey
     });
@@ -1263,6 +1304,46 @@ async function triggerAITurn({ attachmentsForThisTurn = [] } = {}) {
   sendButton.title = "Send";
   render();
   persistState();
+  maybeSummarizeOlderTurns();
+}
+
+async function maybeSummarizeOlderTurns() {
+  if (summarizing || !window.orbit?.summarizeMemory) return;
+  const chat = getActiveChat(state);
+  if (!chat) return;
+
+  const chatId = chat.id;
+  const clean = chat.messages
+    .filter((m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim())
+    .map((m) => ({ role: m.role, content: m.content }));
+  const summarizedCount = Number.isInteger(chat.summarizedCount) && chat.summarizedCount >= 0 ? chat.summarizedCount : 0;
+  const plan = planSummarization(clean.length, summarizedCount);
+  if (!plan.shouldSummarize) return;
+
+  summarizing = true;
+  try {
+    const res = await window.orbit.summarizeMemory({
+      priorSummary: chat.conversationSummary || "",
+      transcript: transcriptFor(clean.slice(plan.fromIndex, plan.toIndex))
+    });
+    const currentChat = getActiveChat(state);
+    if (!res?.ok || typeof res.summary !== "string" || currentChat?.id !== chatId) return;
+
+    const currentLen = currentChat.messages.filter(
+      (m) => !m.pending && !m.streaming && (m.role === "user" || m.role === "assistant") && m.content?.trim()
+    ).length;
+    if (plan.newSummarizedCount <= currentLen) {
+      state = updateActiveChatMemory(state, {
+        conversationSummary: res.summary,
+        summarizedCount: plan.newSummarizedCount
+      });
+      persistState();
+    }
+  } catch (e) {
+    console.warn("summarizeMemory failed:", e);
+  } finally {
+    summarizing = false;
+  }
 }
 
 // Read whatever text already streamed into the in-flight assistant bubble so a
@@ -1342,7 +1423,7 @@ async function createProject() {
     updatedAt: now,
     files: [],
     chats: [
-      { id: crypto.randomUUID(), title: "New Conversation", createdAt: now, messages: [] }
+      createEmptyChat("New Conversation", now)
     ]
   };
   state = {
@@ -1403,7 +1484,7 @@ async function deleteChat(chatId) {
   // behind so the user always has something to type into.
   const nextChats = remaining.length > 0
     ? remaining
-    : [{ id: crypto.randomUUID(), title: "New Conversation", createdAt: new Date().toISOString(), messages: [] }];
+    : [createEmptyChat()];
   const newActiveId = state.activeChatId === chatId ? nextChats[nextChats.length - 1].id : state.activeChatId;
   state = {
     ...state,
@@ -1615,7 +1696,14 @@ function clearActiveChat() {
     ...state,
     projects: state.projects.map((p) => {
       if (p.id !== project.id) return p;
-      return { ...p, chats: p.chats.map((c) => (c.id === chat.id ? { ...c, messages: [] } : c)) };
+      return {
+        ...p,
+        chats: p.chats.map((c) => (
+          c.id === chat.id
+            ? { ...c, messages: [], conversationSummary: "", summarizedCount: 0 }
+            : c
+        ))
+      };
     })
   };
   render();
@@ -2310,7 +2398,7 @@ function openHistoryModal() {
       const remaining = proj.chats.filter((c) => c.id !== e.chat.id);
       const replacement = remaining.length > 0
         ? remaining
-        : [{ id: crypto.randomUUID(), title: "New Conversation", createdAt: new Date().toISOString(), messages: [] }];
+        : [createEmptyChat()];
       state = {
         ...state,
         projects: state.projects.map((p) => (p.id === e.projectId ? { ...p, chats: replacement } : p)),

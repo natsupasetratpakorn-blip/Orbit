@@ -25,3 +25,8 @@ Thumbs.db
 # Built app binaries served from the site — keep the folder, not the .exe
 deploy/downloads/*
 !deploy/downloads/.gitkeep
+
+# graphify tool output
+graphify-out/
+src/graphify-out/
+.graphify_python
