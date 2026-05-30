@@ -8,12 +8,13 @@ import { fileURLToPath } from "node:url";
 import { exec, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 
-import { createHistoryStore } from "../shared/history-store.js";
+import { createHistoryStore, pruneStaleToolResults } from "../shared/history-store.js";
 import { getOverlayBounds } from "../shared/overlay-window.js";
 import { sendToModel, transcribeAudioGCP, summarizeForMemory } from "../shared/ai-service.js";
 import { mergeUserFacts } from "../shared/memory.js";
-import { createTimelineSnapshot, isAllowedExternalUrl, normalizeWorkspaceRoot, resolveInsideWorkspace } from "../shared/workspace-security.js";
+import { createTimelineSnapshot, isExternalHttpUrl, normalizeWorkspaceRoot, resolveInsideWorkspace } from "../shared/workspace-security.js";
 import { GATEWAY_URL } from "../shared/cloud-config.js";
+import { performWebSearch, performReadWebpage, performDeepResearch } from "../shared/web-tools.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,7 @@ function saveUserMemory() {
 // can switch to the floating overlay via the in-app toggle or the tray.
 let currentRendererMode = "app";
 
+
 // Resolve the right history store for the currently active workspace.
 // Without a workspace, falls back to the global chat-history.json (legacy).
 function getHistoryStoreForWorkspace() {
@@ -78,32 +80,6 @@ function getHistoryStoreForWorkspace() {
   return store;
 }
 
-// Clear the persisted conversation transcript(s) at launch so every session
-// starts fresh. Wipes the global store plus every per-workspace history file,
-// preserving each file's preferences (model/mode/etc.).
-async function resetHistoryOnStartup() {
-  try {
-    await historyStore.clearMessages();
-  } catch (err) {
-    console.warn("[Orbit Main] failed to reset global history:", err.message);
-  }
-  try {
-    const workspacesDir = join(app.getPath("userData"), "workspaces");
-    const entries = await readdir(workspacesDir);
-    for (const name of entries) {
-      if (!name.endsWith(".json")) continue;
-      try {
-        await createHistoryStore(join(workspacesDir, name)).clearMessages();
-      } catch (err) {
-        console.warn(`[Orbit Main] failed to reset workspace history ${name}:`, err.message);
-      }
-    }
-  } catch (err) {
-    if (err.code !== "ENOENT") {
-      console.warn("[Orbit Main] failed to scan workspace history dir:", err.message);
-    }
-  }
-}
 // Persisted user-dragged position. Loaded from windowStateStore on launch and
 // rewritten (debounced) whenever the user finishes a drag. null means "never
 // dragged" → fall back to the calculated centered position.
@@ -929,14 +905,14 @@ function registerIpc() {
   });
 
   ipcMain.handle("ai:send", async (event, payload) => {
-    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset, conversationSummary } = payload ?? {};
+    const { model, messages, screenshotPath, attachments, agentMode, streamId, workspaceContext, mode, whisperLanguage, preset, conversationSummary, projectMemory } = payload ?? {};
     // License is owned by the main process, not the caller — so the app and the
     // overlay both route through the gateway with the same key. No key → direct.
     const licenseKey = cloudConfig.licenseKey;
     const gatewayUrl = licenseKey ? GATEWAY_URL : "";
     // Memory = durable cross-session user facts (owned here) + the running
     // summary of older turns in this conversation (owned by the caller).
-    const memory = { userFacts: userMemory.facts, conversationSummary: conversationSummary || "" };
+    const memory = { userFacts: userMemory.facts, conversationSummary: conversationSummary || "", projectMemory: projectMemory || "" };
     const { imageBase64, mimeType } = await loadScreenshotBase64(screenshotPath);
     const { parts: attachmentParts, text: attachmentText } = await loadAttachmentParts(attachments);
 
@@ -960,8 +936,9 @@ function registerIpc() {
     if (streamId) activeStreams.set(streamId, controller);
 
     try {
+      const prunedMessages = pruneStaleToolResults(messages);
       const reply = await sendToModel({
-        model, messages, imageBase64, mimeType,
+        model, messages: prunedMessages, imageBase64, mimeType,
         attachmentParts, attachmentText,
         agentMode, onChunk, onUsage, workspaceContext, mode, whisperLanguage, preset, memory,
         gatewayUrl, licenseKey,
@@ -1625,7 +1602,7 @@ function registerIpc() {
 
   // Open external browser for the user using Electron's shell module.
   ipcMain.handle("desktop:open-browser", async (_event, { url }) => {
-    if (!isAllowedExternalUrl(url)) {
+    if (!isExternalHttpUrl(url)) {
       return { ok: false, error: "Only http:// and https:// URLs can be opened externally." };
     }
     try {
@@ -1636,6 +1613,18 @@ function registerIpc() {
       console.warn(`[Orbit Browser] Failed to open external URL ${url}: ${err.message}`);
       return { ok: false, error: err.message };
     }
+  });
+
+  ipcMain.handle("web:search", async (_event, { query } = {}) => {
+    return performWebSearch(query);
+  });
+
+  ipcMain.handle("web:deep-search", async (_event, { query } = {}) => {
+    return performDeepResearch(query);
+  });
+
+  ipcMain.handle("web:read", async (_event, { url } = {}) => {
+    return performReadWebpage(url);
   });
 
   // Launch a desktop application by friendly name or full path. Tries three

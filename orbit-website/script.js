@@ -450,57 +450,113 @@ if (!reduceMotion) {
   const screen = $("#demoScreen");
   if (!screen) return;
   const fill = $("#demoFill"), status = $("#demoStatus"), replay = $("#demoReplay");
-  const items = $$("#demoList li");
   let token = 0;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const add = (html) => { screen.insertAdjacentHTML("beforeend", html); screen.scrollTop = screen.scrollHeight; return screen.lastElementChild; };
-  const setStep = (i) => items.forEach((li, idx) => { li.classList.toggle("active", idx === i); li.classList.toggle("done", idx < i); });
+  const setStep = (items, i) => items.forEach((li, idx) => { li.classList.toggle("active", idx === i); li.classList.toggle("done", idx < i); });
   const setFill = (f) => (fill.style.width = `${Math.round(f * 100)}%`);
 
+  let currentScenario = "coding";
+
   function finalState() {
-    screen.innerHTML =
-      `<div class="chat-line user"><span class="who">You</span><span class="bubble">Fix the failing auth test</span></div>` +
-      `<div class="demo-shot"><span class="shot-ico">▦</span> screen captured · 1440×900 · sent as context</div>` +
-      `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> patch_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>` +
-      `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> execute_command <span class="tool-path">npm test</span><span class="tool-ok">✓</span></div></div>` +
-      `<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Fixed: token expiry compared in ms vs s. Patched <code>verify.ts</code> — all 14 tests pass. ✓</p></div></div>`;
+    const isWeb = currentScenario === "web";
+    const items = $$(`#demoList${isWeb ? "Web" : "Coding"} li`);
+    if (isWeb) {
+      screen.innerHTML =
+        `<div class="chat-line user"><span class="who">You</span><span class="bubble">Who won the 2024 F1 championship?</span></div>` +
+        `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> web:search <span class="tool-path">"2024 F1 championship winner"</span><span class="tool-ok">✓</span></div></div>` +
+        `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> web:read <span class="tool-path">formula1.com/standings</span><span class="tool-ok">✓</span></div></div>` +
+        `<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Max Verstappen won the 2024 FIA Formula One World Championship. ✓</p></div></div>`;
+    } else {
+      screen.innerHTML =
+        `<div class="chat-line user"><span class="who">You</span><span class="bubble">Fix the failing auth test</span></div>` +
+        `<div class="demo-shot"><span class="shot-ico">▦</span> screen captured · 1440×900 · sent as context</div>` +
+        `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> patch_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>` +
+        `<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> execute_command <span class="tool-path">npm test</span><span class="tool-ok">✓</span></div></div>` +
+        `<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Fixed: token expiry compared in ms vs s. Patched <code>verify.ts</code> — all 14 tests pass. ✓</p></div></div>`;
+    }
     items.forEach((li) => { li.classList.remove("active"); li.classList.add("done"); });
     setFill(1); status.textContent = "Complete ✓";
   }
 
   async function play() {
     const my = ++token;
+    const isWeb = currentScenario === "web";
+    const listId = isWeb ? "demoListWeb" : "demoListCoding";
+    
+    if ($("#demoListCoding")) $("#demoListCoding").style.display = isWeb ? "none" : "flex";
+    if ($("#demoListWeb")) $("#demoListWeb").style.display = isWeb ? "flex" : "none";
+    
+    const items = $$(`#${listId} li`);
+    items.forEach((li) => { li.classList.remove("active", "done"); });
+    
     screen.innerHTML = ""; setFill(0); status.textContent = "Running…";
-    add(`<div class="chat-line user"><span class="who">You</span><span class="bubble">Fix the failing auth test</span></div>`);
-    await sleep(650); if (my !== token) return;
 
-    setStep(0); status.textContent = "Reading screen…";
-    add(`<div class="demo-shot"><span class="shot-ico">▦</span> screen captured · 1440×900 · sent as context</div>`);
-    setFill(0.2); await sleep(1100); if (my !== token) return;
+    if (isWeb) {
+      add(`<div class="chat-line user"><span class="who">You</span><span class="bubble">Who won the 2024 F1 championship?</span></div>`);
+      await sleep(650); if (my !== token) return;
 
-    setStep(1); status.textContent = "Searching workspace…";
-    add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> search_workspace <span class="tool-path">"verifyToken"</span><span class="tool-ok">✓</span></div></div>`);
-    await sleep(650); if (my !== token) return;
-    add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> read_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>`);
-    setFill(0.4); await sleep(950); if (my !== token) return;
+      setStep(items, 0); status.textContent = "Searching web…";
+      add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> web:search <span class="tool-path">"2024 F1 championship winner"</span><span class="tool-ok">✓</span></div></div>`);
+      setFill(0.3); await sleep(1200); if (my !== token) return;
 
-    setStep(2); status.textContent = "Patching file…";
-    add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> patch_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>`);
-    setFill(0.6); await sleep(1000); if (my !== token) return;
+      setStep(items, 1); status.textContent = "Reading pages…";
+      add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> web:read <span class="tool-path">formula1.com/standings</span><span class="tool-ok">✓</span></div></div>`);
+      setFill(0.6); await sleep(1000); if (my !== token) return;
 
-    setStep(3); status.textContent = "Running tests…";
-    const tc = add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot run"></span> execute_command <span class="tool-path">npm test</span><span class="tool-spin"></span></div></div>`);
-    setFill(0.82); await sleep(1700); if (my !== token) return;
-    tc.querySelector(".tool-spin").outerHTML = `<span class="tool-ok">✓</span>`;
-    tc.querySelector(".tool-dot").classList.remove("run");
-    await sleep(500); if (my !== token) return;
+      setStep(items, 2); status.textContent = "Extracting information…";
+      setFill(0.8); await sleep(1200); if (my !== token) return;
 
-    setStep(4); status.textContent = "Reporting…";
-    add(`<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Fixed: token expiry compared in ms vs s. Patched <code>verify.ts</code> — all 14 tests pass. ✓</p></div></div>`);
-    setFill(1); await sleep(400); if (my !== token) return;
-    items.forEach((li) => { li.classList.remove("active"); li.classList.add("done"); });
-    status.textContent = "Complete ✓";
+      setStep(items, 3); status.textContent = "Reporting…";
+      add(`<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Max Verstappen won the 2024 FIA Formula One World Championship. ✓</p></div></div>`);
+      setFill(1); await sleep(400); if (my !== token) return;
+      items.forEach((li) => { li.classList.remove("active"); li.classList.add("done"); });
+      status.textContent = "Complete ✓";
+
+    } else {
+      add(`<div class="chat-line user"><span class="who">You</span><span class="bubble">Fix the failing auth test</span></div>`);
+      await sleep(650); if (my !== token) return;
+
+      setStep(items, 0); status.textContent = "Reading screen…";
+      add(`<div class="demo-shot"><span class="shot-ico">▦</span> screen captured · 1440×900 · sent as context</div>`);
+      setFill(0.2); await sleep(1100); if (my !== token) return;
+
+      setStep(items, 1); status.textContent = "Searching workspace…";
+      add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> search_workspace <span class="tool-path">"verifyToken"</span><span class="tool-ok">✓</span></div></div>`);
+      await sleep(650); if (my !== token) return;
+      add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> read_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>`);
+      setFill(0.4); await sleep(950); if (my !== token) return;
+
+      setStep(items, 2); status.textContent = "Patching file…";
+      add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot"></span> patch_file <span class="tool-path">src/auth/verify.ts</span><span class="tool-ok">✓</span></div></div>`);
+      setFill(0.6); await sleep(1000); if (my !== token) return;
+
+      setStep(items, 3); status.textContent = "Running tests…";
+      const tc = add(`<div class="tool-card"><div class="tool-head"><span class="tool-dot run"></span> execute_command <span class="tool-path">npm test</span><span class="tool-spin"></span></div></div>`);
+      setFill(0.82); await sleep(1700); if (my !== token) return;
+      tc.querySelector(".tool-spin").outerHTML = `<span class="tool-ok">✓</span>`;
+      tc.querySelector(".tool-dot").classList.remove("run");
+      await sleep(500); if (my !== token) return;
+
+      setStep(items, 4); status.textContent = "Reporting…";
+      add(`<div class="chat-line ai"><span class="who">Voyager</span><div class="ai-body done"><p>Fixed: token expiry compared in ms vs s. Patched <code>verify.ts</code> — all 14 tests pass. ✓</p></div></div>`);
+      setFill(1); await sleep(400); if (my !== token) return;
+      items.forEach((li) => { li.classList.remove("active"); li.classList.add("done"); });
+      status.textContent = "Complete ✓";
+    }
   }
+
+  $$(".scenario-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (btn.classList.contains("is-active")) return;
+      $$(".scenario-btn").forEach((b) => {
+        b.classList.toggle("is-active", b === btn);
+        b.setAttribute("aria-selected", b === btn ? "true" : "false");
+      });
+      currentScenario = btn.dataset.scenario;
+      if (reduceMotion) finalState(); else play();
+    });
+  });
 
   replay.addEventListener("click", play);
   if (reduceMotion) { finalState(); return; }

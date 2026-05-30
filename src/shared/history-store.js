@@ -31,6 +31,49 @@ function normalizeHistory(value) {
   };
 }
 
+function extractToolName(content) {
+  const text = String(content || "");
+  const colonMatch = text.match(/^\[TOOL_RESULT:\s*([^\]\s]+)/);
+  if (colonMatch) return colonMatch[1];
+  const legacyMatch = text.match(/^\[TOOL_RESULT\]\s*([^\s:]+)/);
+  if (legacyMatch) return legacyMatch[1];
+  return "tool";
+}
+
+function isToolResultMessage(message) {
+  return !!message && typeof message.content === "string" && message.content.startsWith("[TOOL_RESULT");
+}
+
+function countsAsConversationTurn(message) {
+  if (!message || message.pending || message.streaming || isToolResultMessage(message)) return false;
+  return (message.role === "user" || message.role === "assistant") &&
+    typeof message.content === "string" &&
+    message.content.trim().length > 0;
+}
+
+export function pruneStaleToolResults(messages, { keepRecentTurns = 5 } = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  let turnsAfter = 0;
+  const out = new Array(list.length);
+
+  for (let i = list.length - 1; i >= 0; i--) {
+    const message = list[i];
+    if (isToolResultMessage(message) && turnsAfter > keepRecentTurns) {
+      const toolName = extractToolName(message.content);
+      out[i] = {
+        ...message,
+        content: `[TOOL_RESULT: ${toolName} - Output truncated to save memory]`
+      };
+    } else {
+      out[i] = message && typeof message === "object" ? { ...message } : message;
+    }
+
+    if (countsAsConversationTurn(message)) turnsAfter += 1;
+  }
+
+  return out;
+}
+
 export function createHistoryStore(filePath) {
   return {
     async load() {

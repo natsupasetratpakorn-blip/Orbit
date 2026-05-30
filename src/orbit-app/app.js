@@ -8,6 +8,8 @@ import {
   updateActiveChatMemory
 } from "../shared/orbit-state.js";
 import { parseAIResponse, renderMarkdown, parseQuestions } from "../shared/parser.js";
+import { buildInlineToolBadges, streamingToolDisplay } from "../shared/tool-ui.js";
+import { parseSlashToolCommand, TOOL_SLASH_COMMANDS } from "../shared/slash-tools.js";
 import { unsummarizedTail, planSummarization, transcriptFor } from "../shared/memory.js";
 import { PRESETS, DEFAULT_PRESET, DEFAULT_MODEL, normalizePreset, DEFAULT_PLAN, normalizePlan, getPlan, planDailyLimit } from "../shared/models.js";
 import { transcribeWithWhisper, warmupWhisper } from "../orbit-overlay/whisper.js";
@@ -19,7 +21,7 @@ const STORAGE_KEY = "orbit.antigravity.workspace";
 // cloud-config.js. Customers only paste a license key; the main process owns
 // the key. Leave it blank to use direct gcloud (dev mode).
 const MODES = ["ask", "agents", "planning"];
-const MODE_LABELS = { ask: "❯ Ask", agents: "▣ Agents", planning: "☰ Planning" };
+const MODE_LABELS = { ask: "Ask", agents: "Agents", planning: "Planning" };
 
 const SLASH_COMMANDS = [
   { name: "/explain", desc: "Walk me through what's on screen / attached" },
@@ -27,6 +29,7 @@ const SLASH_COMMANDS = [
   { name: "/test", desc: "Write tests covering the code in context" },
   { name: "/refactor", desc: "Refactor for readability, behavior-preserving" },
   { name: "/summarize", desc: "Tight bullet-point summary" },
+  ...TOOL_SLASH_COMMANDS.map(({ name, desc }) => ({ name, desc })),
   { name: "/ask", desc: "Switch to Ask mode" },
   { name: "/agents", desc: "Switch to Agents mode" },
   { name: "/planning", desc: "Switch to Planning mode" },
@@ -300,6 +303,15 @@ function basename(p) {
   return (p || "").split(/[\\/]/).pop() || p;
 }
 
+function activateRowWithKeyboard(row, onActivate) {
+  row.addEventListener("keydown", (event) => {
+    if (event.target !== row) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onActivate(event);
+  });
+}
+
 // ─── Sidebar rendering ───────────────────────────────────────────────────
 function renderProjects() {
   const activeProject = getActiveProject(state);
@@ -312,6 +324,7 @@ function renderProjects() {
     const item = document.createElement("div");
     item.setAttribute("role", "button");
     item.tabIndex = 0;
+    item.setAttribute("aria-current", project.id === state.activeProjectId ? "true" : "false");
     item.className = `project-row${project.id === state.activeProjectId ? " is-active" : ""}`;
     const dotColor = colorForId(project.id);
     item.innerHTML = `
@@ -320,20 +333,24 @@ function renderProjects() {
         <span class="project-name"></span>
         <span class="project-subline"></span>
       </span>
-      <button type="button" class="row-delete" aria-label="Delete project" title="Delete project">×</button>
+      <button type="button" class="row-delete" aria-label="Delete project" title="Delete project">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
     `;
     item.querySelector(".project-name").textContent = project.name;
     const subline = project.workspacePath
-      ? `▤ ${basename(project.workspacePath)}`
+      ? `Folder: ${basename(project.workspacePath)}`
       : (project.chats.at(-1)?.title ?? "No conversations yet");
     const sublineEl = item.querySelector(".project-subline");
     sublineEl.textContent = subline;
     if (project.workspacePath) sublineEl.title = project.workspacePath;
-    item.addEventListener("click", () => {
+    const activateProject = () => {
       state = selectProject(state, project.id);
       render();
       persistState();
-    });
+    };
+    item.addEventListener("click", activateProject);
+    activateRowWithKeyboard(item, activateProject);
     item.addEventListener("dblclick", () => renameProject(project.id));
     item.querySelector(".row-delete").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -354,19 +371,24 @@ function renderConversations() {
     const item = document.createElement("div");
     item.setAttribute("role", "button");
     item.tabIndex = 0;
+    item.setAttribute("aria-current", chat.id === state.activeChatId ? "true" : "false");
     item.className = `conversation-row${chat.id === state.activeChatId ? " is-active" : ""}`;
     item.innerHTML = `
       <span class="conversation-title"></span>
       <span class="conversation-age"></span>
-      <button type="button" class="row-delete" aria-label="Delete conversation" title="Delete conversation">×</button>
+      <button type="button" class="row-delete" aria-label="Delete conversation" title="Delete conversation">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
     `;
     item.querySelector(".conversation-title").textContent = chat.title;
     item.querySelector(".conversation-age").textContent = formatAge(chat.createdAt);
-    item.addEventListener("click", () => {
+    const activateConversation = () => {
       state = { ...state, activeChatId: chat.id };
       render();
       persistState();
-    });
+    };
+    item.addEventListener("click", activateConversation);
+    activateRowWithKeyboard(item, activateConversation);
     item.addEventListener("dblclick", () => renameChat(chat.id));
     item.querySelector(".row-delete").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -388,10 +410,14 @@ function renderFiles() {
     const row = document.createElement("div");
     row.className = "file-row";
     row.innerHTML = `
-      <span class="file-icon">▤</span>
+      <span class="file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg></span>
       <span class="file-name" title=""></span>
-      <button type="button" class="file-attach" title="Attach to next message">↑</button>
-      <button type="button" class="file-remove" title="Remove from project">×</button>
+      <button type="button" class="file-attach" aria-label="Attach to next message" title="Attach to next message">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+      </button>
+      <button type="button" class="file-remove" aria-label="Remove from project" title="Remove from project">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
     `;
     const nameEl = row.querySelector(".file-name");
     nameEl.textContent = basename(file.path);
@@ -459,7 +485,8 @@ function renderUserBody(message, container) {
     message.attachments.forEach((a) => {
       const chip = document.createElement("span");
       chip.className = "attach-chip-inline";
-      chip.textContent = `▤ ${a.name}`;
+      chip.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg><span></span>`;
+      chip.querySelector("span").textContent = a.name;
       chip.title = a.path;
       chips.append(chip);
     });
@@ -472,13 +499,15 @@ function renderUserBody(message, container) {
 const cardExecutionStates = {};
 const READ_ONLY_TOOL_TYPES = new Set([
   "read_file", "list_workspace", "list_windows", "search_workspace",
-  "list_dir", "git_status", "git_diff", "git_log"
+  "list_dir", "git_status", "git_diff", "git_log", "web_search", "deep_research", "read_webpage"
 ]);
 const AUTO_RUN_IN_AGENT_MODE = new Set([
   "execute_command", "write_file", "patch_file",
   "type_text", "click_pixel", "scroll", "keystroke", "focus_window", "wait_ms",
-  "open_browser", "deploy_agent",
+  "open_browser", "open_url", "open_app", "deploy_agent",
   "delete_file", "move_file", "create_directory"
+  // deep_research is a READ_ONLY_TOOL_TYPE already, so it auto-runs in every
+  // mode — no need to list it here too.
 ]);
 
 
@@ -654,6 +683,11 @@ function renderAskUserQuestionsCard(part, messageId) {
 }
 
 function renderAssistantBody(message, container) {
+  if (message.streaming) {
+    renderStreamingAssistantBody(message, container);
+    return;
+  }
+
   const parts = parseAIResponse(message.content || "");
   if (!parts.length) {
     const p = document.createElement("div");
@@ -663,20 +697,34 @@ function renderAssistantBody(message, container) {
     return;
   }
   let partIdx = 0;
+  let toolGroup = [];
+  const flushToolGroup = () => {
+    if (!toolGroup.length) return;
+    container.append(renderInlineToolBadges(
+      toolGroup.map((item) => item.part),
+      (part, idx) => cardExecutionStates[toolGroup[idx].cardKey]?.status || "running"
+    ));
+    container.append(renderThinkingBlock(toolGroup));
+    toolGroup = [];
+  };
+
   for (const part of parts) {
     if (part.type === "text") {
+      flushToolGroup();
       const p = document.createElement("div");
       p.className = "assistant-text";
       p.innerHTML = renderMarkdown(part.content);
       container.append(p);
     } else if (part.type === "ask_user_questions") {
+      flushToolGroup();
       container.append(renderAskUserQuestionsCard(part, message.id));
     } else {
       const cardKey = `${message.id}-${part.type}-${partIdx}`;
-      container.append(renderActionCard(part, cardKey));
+      toolGroup.push({ part, cardKey });
       partIdx++;
     }
   }
+  flushToolGroup();
 }
 
 // After the message list re-renders, auto-fire any tool cards that haven't
@@ -746,8 +794,142 @@ const TOOL_LABEL = {
   create_directory: "Create folder",
   git_status: "Git status",
   git_diff: "Git diff",
-  git_log: "Git log"
+  git_log: "Git log",
+  web_search: "Web search",
+  deep_research: "Deep research",
+  read_webpage: "Read webpage",
+  open_url: "Open URL",
+  open_app: "Open app"
 };
+
+const SVG_ICONS = {
+  command: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`,
+  file: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+  folder: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  search: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>`,
+  globe: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  mouse: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="7"></rect><line x1="12" y1="6" x2="12" y2="10"></line></svg>`,
+  window: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>`,
+  bot: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>`,
+  trash: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+  move: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"></polyline><polyline points="9 5 12 2 15 5"></polyline><polyline points="19 9 22 12 19 15"></polyline><polyline points="9 19 12 22 15 19"></polyline><line x1="2" y1="12" x2="22" y2="12"></line><line x1="12" y1="2" x2="12" y2="22"></line></svg>`,
+  git: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9v6"></path><path d="M6 9v3a3 3 0 0 0 3 3h6"></path></svg>`,
+  book: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>`,
+  link: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`,
+  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>`,
+  gear: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`
+};
+
+const TOOL_ICON = {
+  execute_command: SVG_ICONS.command,
+  write_file: SVG_ICONS.file,
+  patch_file: SVG_ICONS.file,
+  read_file: SVG_ICONS.file,
+  list_workspace: SVG_ICONS.folder,
+  list_windows: SVG_ICONS.window,
+  search_workspace: SVG_ICONS.search,
+  type_text: SVG_ICONS.command,
+  click_pixel: SVG_ICONS.mouse,
+  scroll: SVG_ICONS.mouse,
+  keystroke: SVG_ICONS.command,
+  focus_window: SVG_ICONS.window,
+  wait_ms: SVG_ICONS.command,
+  open_browser: SVG_ICONS.globe,
+  deploy_agent: SVG_ICONS.bot,
+  list_dir: SVG_ICONS.folder,
+  delete_file: SVG_ICONS.trash,
+  move_file: SVG_ICONS.move,
+  create_directory: SVG_ICONS.folder,
+  git_status: SVG_ICONS.git,
+  git_diff: SVG_ICONS.git,
+  git_log: SVG_ICONS.git,
+  web_search: SVG_ICONS.globe,
+  deep_research: SVG_ICONS.search,
+  read_webpage: SVG_ICONS.book,
+  open_url: SVG_ICONS.link,
+  open_app: SVG_ICONS.window
+};
+
+const INLINE_TOOL_ICON = {
+  terminal: SVG_ICONS.command,
+  edit: SVG_ICONS.file,
+  read: SVG_ICONS.book,
+  research: SVG_ICONS.globe,
+  action: SVG_ICONS.mouse,
+  agent: SVG_ICONS.bot
+};
+
+const MODE_ICON = {
+  ask: SVG_ICONS.command,
+  agents: SVG_ICONS.bot,
+  planning: SVG_ICONS.book
+};
+
+function renderInlineToolBadges(parts, statusForPart = () => "running") {
+  const row = document.createElement("div");
+  row.className = "inline-tool-row";
+  const badges = buildInlineToolBadges(parts, statusForPart);
+  badges.forEach((badge) => {
+    const el = document.createElement("span");
+    el.className = `inline-tool-badge inline-tool-${badge.kind} is-${badge.status || "running"}`;
+    el.title = badge.label;
+    el.innerHTML = `<span class="inline-tool-icon">${INLINE_TOOL_ICON[badge.kind] || SVG_ICONS.gear}</span><span></span>`;
+    el.querySelector("span:last-child").textContent = badge.label;
+    row.append(el);
+  });
+  return row;
+}
+
+function renderThinkingBlock(toolGroup) {
+  const details = document.createElement("details");
+  const hasRunning = toolGroup.some(({ cardKey }) => {
+    const status = cardExecutionStates[cardKey]?.status;
+    return !status || status === "idle" || status === "running";
+  });
+  details.className = `thinking-block ${hasRunning ? "is-running" : "is-complete"}`;
+
+  const summary = document.createElement("summary");
+  const statusIcon = hasRunning
+    ? `<span class="thinking-spinner" aria-hidden="true"></span>`
+    : `<span class="thinking-done" aria-hidden="true">${SVG_ICONS.check}</span>`;
+  summary.innerHTML = `
+    ${statusIcon}
+    <span>${hasRunning ? "Orbit is thinking..." : "Thought process"}</span>
+    <span class="thinking-count">${toolGroup.length} tool${toolGroup.length === 1 ? "" : "s"}</span>
+  `;
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "thinking-body";
+  toolGroup.forEach(({ part, cardKey }) => {
+    body.append(renderActionCard(part, cardKey));
+  });
+  details.append(body);
+  return details;
+}
+
+function renderStreamingAssistantBody(message, container) {
+  const display = streamingToolDisplay(message.content || "");
+  if (display.text) {
+    const p = document.createElement("div");
+    p.className = "assistant-text";
+    p.innerHTML = renderMarkdown(display.text);
+    container.append(p);
+  }
+  if (display.badges.length) {
+    const row = document.createElement("div");
+    row.className = "inline-tool-row";
+    display.badges.forEach((badge) => {
+      const el = document.createElement("span");
+      el.className = `inline-tool-badge inline-tool-${badge.kind} is-live is-${badge.status || "running"}`;
+      el.title = badge.label;
+      el.innerHTML = `<span class="inline-tool-icon">${INLINE_TOOL_ICON[badge.kind] || SVG_ICONS.gear}</span><span></span>`;
+      el.querySelector("span:last-child").textContent = badge.label;
+      row.append(el);
+    });
+    container.append(row);
+  }
+}
 
 function renderActionCard(part, cardKey) {
   const card = document.createElement("div");
@@ -758,6 +940,7 @@ function renderActionCard(part, cardKey) {
   const head = document.createElement("div");
   head.className = "action-card-head";
   const label = TOOL_LABEL[part.type] || part.type;
+  const icon = TOOL_ICON[part.type] || SVG_ICONS.gear;
   const subtitle = part.type === "move_file" ? `${part.from} → ${part.to}`
     : part.type === "read_file" && part.start != null ? `${part.path} :${part.start}-${part.end}`
     : part.path ? part.path
@@ -768,7 +951,7 @@ function renderActionCard(part, cardKey) {
     : part.query ? `"${part.query}"`
     : "";
   head.innerHTML = `
-    <span class="action-icon"></span>
+    <span class="action-icon">${icon}</span>
     <span class="action-label">${escapeHtml(label)}</span>
     ${subtitle ? `<span class="action-path">${escapeHtml(subtitle)}</span>` : ""}
     <span class="action-status status-${cardState.status}"></span>
@@ -1034,6 +1217,48 @@ async function executeToolPart(part, cardKey, messageId) {
         toolResult = `[TOOL_RESULT: deploy_agent]\n${output}`;
         break;
       }
+      case "web_search": {
+        const res = await window.orbit.webSearch({ query: part.query });
+        ok = !!res?.ok;
+        if (ok) {
+          const results = Array.isArray(res.results) ? res.results : [];
+          output = results.length ? results.map(r => `Title: ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}\n`).join("\n---\n") : "No results found.";
+        } else {
+          output = res?.error || "Search failed";
+        }
+        toolResult = `[TOOL_RESULT: web_search]\n${truncateForAI(output)}`;
+        break;
+      }
+      case "deep_research": {
+        const res = await window.orbit.deepSearch({ query: part.query });
+        ok = !!res?.ok;
+        output = ok ? (res.report || "No report returned.") : (res?.error || "Deep research failed");
+        toolResult = `[TOOL_RESULT: deep_research query="${part.query}"]\n${truncateForAI(output)}`;
+        break;
+      }
+      case "read_webpage": {
+        const res = await window.orbit.readWebpage({ url: part.url });
+        ok = !!res?.ok;
+        const text = `${res?.text || "(no readable text)"}`;
+        const capped = text.length > 8000 ? `${text.slice(0, 8000)}\n\n[…truncated…]` : text;
+        output = ok ? `Title: ${res?.title || part.url}\nURL: ${res?.url || part.url}\n\n${capped}${res?.truncated ? "\n\n[Page text truncated]" : ""}` : (res?.error || "Read failed");
+        toolResult = `[TOOL_RESULT: read_webpage]\n${output}`;
+        break;
+      }
+      case "open_url": {
+        const res = await window.orbit.openBrowser({ url: part.url });
+        ok = !!res?.ok;
+        output = ok ? `Opened ${part.url}` : (res?.error || "open_url failed");
+        toolResult = `[TOOL_RESULT: open_url]\n${output}`;
+        break;
+      }
+      case "open_app": {
+        const res = await window.orbit.openApp({ name: part.name, args: part.args });
+        ok = !!res?.ok;
+        output = ok ? `Opened ${part.name}` : (res?.error || "open_app failed");
+        toolResult = `[TOOL_RESULT: open_app]\n${output}`;
+        break;
+      }
       default:
         ok = false;
         output = `Unknown tool: ${part.type}`;
@@ -1108,16 +1333,25 @@ function maybeRetitleFirstChat() {
 }
 
 async function sendMessage(rawText) {
-  const text = rawText.trim();
+  let text = rawText.trim();
   if (!text) return;
   if (streaming) return; // already in flight
+  const slashToolRequest = parseSlashToolCommand(text);
 
   if (text.startsWith("/")) {
-    const handled = await tryRunSlashCommand(text);
-    if (handled) {
-      promptInput.value = "";
-      autoResize();
+    if (slashToolRequest?.error) {
+      toast(slashToolRequest.error, "error");
       return;
+    }
+    if (slashToolRequest) {
+      // Handled below as a direct tool request.
+    } else {
+      const handled = await tryRunSlashCommand(text);
+      if (handled) {
+        promptInput.value = "";
+        autoResize();
+        return;
+      }
     }
   }
 
@@ -1152,6 +1386,18 @@ async function sendMessage(rawText) {
   autoResize();
   render();
   persistState();
+
+  if (slashToolRequest) {
+    state = addMessageToActiveChat(state, {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: slashToolRequest.assistantContent,
+      timestamp: new Date().toISOString()
+    });
+    render();
+    persistState();
+    return;
+  }
 
   await triggerAITurn({ attachmentsForThisTurn: attachmentsSnapshot });
 }
@@ -1601,7 +1847,16 @@ function renderAttachedRow() {
   attachedFiles.forEach((a, idx) => {
     const chip = document.createElement("span");
     chip.className = "attach-chip";
-    chip.innerHTML = `<span>▤ ${escapeHtml(a.name)}</span><button type="button" aria-label="Remove">×</button>`;
+    chip.innerHTML = `
+      <span class="attach-chip-label">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg>
+        <span></span>
+      </span>
+      <button type="button" aria-label="Remove attachment">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
+    `;
+    chip.querySelector(".attach-chip-label span").textContent = a.name;
     chip.title = a.path;
     chip.querySelector("button").addEventListener("click", () => {
       attachedFiles.splice(idx, 1);
@@ -1670,7 +1925,7 @@ async function tryRunSlashCommand(input) {
       const task = m[2].trim();
       const workspacePath = getActiveProject(state)?.workspacePath || state.workspacePath || null;
       if (!workspacePath) {
-        toast("This project has no folder. Click ▤ Choose folder above the chat to set one.", "error", 6000);
+        toast("This project has no folder. Click Choose folder above the chat to set one.", "error", 6000);
         return true;
       }
       toast(`Summoning ${n} agents…`, "success");
@@ -1717,7 +1972,7 @@ let slashFiltered = [];
 
 function updateSlashMenu() {
   const value = promptInput.value;
-  if (!value.startsWith("/")) {
+  if (!value.startsWith("/") || value.includes(" ")) {
     hideSlashMenu();
     return;
   }
@@ -1729,12 +1984,21 @@ function updateSlashMenu() {
   }
   slashSelectedIdx = Math.min(slashSelectedIdx, slashFiltered.length - 1);
   slashMenuEl.innerHTML = slashFiltered.map((cmd, i) => `
-    <div class="slash-item${i === slashSelectedIdx ? " is-selected" : ""}" data-cmd="${cmd.name}">
+    <div class="slash-item${i === slashSelectedIdx ? " is-selected" : ""}" role="option" aria-selected="${i === slashSelectedIdx ? "true" : "false"}" data-cmd="${cmd.name}">
       <span class="slash-name">${cmd.name}</span>
       <span class="slash-desc">${escapeHtml(cmd.desc)}</span>
     </div>
   `).join("");
   slashMenuEl.hidden = false;
+  slashMenuEl.setAttribute("role", "listbox");
+  promptInput.setAttribute("aria-controls", "slashMenu");
+  promptInput.setAttribute("aria-expanded", "true");
+
+  const selectedEl = slashMenuEl.querySelector(".slash-item.is-selected");
+  if (selectedEl) {
+    selectedEl.scrollIntoView({ block: "nearest" });
+  }
+
   slashMenuEl.querySelectorAll(".slash-item").forEach((el) => {
     el.addEventListener("click", () => {
       promptInput.value = el.dataset.cmd + " ";
@@ -1744,18 +2008,34 @@ function updateSlashMenu() {
   });
 }
 
+function updateSlashSelection() {
+  const items = slashMenuEl.querySelectorAll(".slash-item");
+  items.forEach((el, i) => {
+    if (i === slashSelectedIdx) {
+      el.classList.add("is-selected");
+      el.setAttribute("aria-selected", "true");
+      el.scrollIntoView({ block: "nearest" });
+    } else {
+      el.classList.remove("is-selected");
+      el.setAttribute("aria-selected", "false");
+    }
+  });
+}
+
 function hideSlashMenu() {
   slashFiltered = [];
   slashSelectedIdx = 0;
   slashMenuEl.hidden = true;
+  promptInput.setAttribute("aria-expanded", "false");
 }
 
 // ─── Mode + model selectors ─────────────────────────────────────────────
 function setMode(mode) {
   if (!MODES.includes(mode)) return;
   currentMode = mode;
-  modeButton.textContent = MODE_LABELS[mode];
+  modeButton.innerHTML = `<span class="mode-icon" aria-hidden="true">${MODE_ICON[mode] || SVG_ICONS.command}</span><span>${MODE_LABELS[mode]}</span>`;
   modeButton.dataset.mode = mode;
+  modeButton.setAttribute("aria-label", `Current mode: ${MODE_LABELS[mode]}. Click to switch mode.`);
   persistState();
 }
 
@@ -2362,6 +2642,8 @@ function openHistoryModal() {
     const msgCount = (e.chat.messages || []).filter((m) => !m.isToolResult).length;
     const row = document.createElement("div");
     row.className = "history-row";
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
     row.innerHTML = `
       <div class="history-row-main">
         <div class="history-row-title"></div>
@@ -2369,18 +2651,22 @@ function openHistoryModal() {
       </div>
       <div class="history-row-meta">
         <span class="history-row-age"></span>
-        <button type="button" class="row-delete" title="Delete">×</button>
+        <button type="button" class="row-delete" aria-label="Delete conversation" title="Delete">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        </button>
       </div>
     `;
     row.querySelector(".history-row-title").textContent = e.chat.title;
     row.querySelector(".history-row-sub").textContent = `${e.projectName} · ${msgCount} msg`;
     row.querySelector(".history-row-age").textContent = formatAge(e.chat.createdAt);
-    row.addEventListener("click", () => {
+    const activateHistoryRow = () => {
       state = { ...state, activeProjectId: e.projectId, activeChatId: e.chat.id };
       render();
       persistState();
       close();
-    });
+    };
+    row.addEventListener("click", activateHistoryRow);
+    activateRowWithKeyboard(row, activateHistoryRow);
     row.querySelector(".row-delete").addEventListener("click", async (ev) => {
       ev.stopPropagation();
       // Use the same confirm + deletion path that the sidebar uses, but
@@ -2730,11 +3016,12 @@ function renderActiveProjectFolderBadge(project) {
     else header.append(badge);
   }
   if (project.workspacePath) {
-    badge.textContent = `▤ ${basename(project.workspacePath)}`;
+    badge.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg><span></span>`;
+    badge.querySelector("span").textContent = basename(project.workspacePath);
     badge.classList.remove("is-empty");
     badge.title = `Workspace: ${project.workspacePath} (click to change)`;
   } else {
-    badge.textContent = "▤ Choose folder";
+    badge.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path><path d="M12 11v5"></path><path d="M9.5 13.5h5"></path></svg><span>Choose folder</span>`;
     badge.classList.add("is-empty");
     badge.title = "No folder bound to this project — click to choose";
   }
@@ -2755,6 +3042,8 @@ function autoResize() {
 function updateScreenshotToggleUI() {
   screenshotToggleButton.classList.toggle("is-active", attachScreenshot);
   screenshotToggleButton.title = attachScreenshot ? "Screenshot auto-attaching" : "Screenshot off";
+  screenshotToggleButton.setAttribute("aria-pressed", attachScreenshot ? "true" : "false");
+  screenshotToggleButton.setAttribute("aria-label", attachScreenshot ? "Screenshot context on" : "Screenshot context off");
 }
 
 function render() {
@@ -2837,8 +3126,8 @@ promptInput.addEventListener("input", () => {
 promptInput.addEventListener("keydown", (event) => {
   // Slash menu navigation
   if (!slashMenuEl.hidden && slashFiltered.length) {
-    if (event.key === "ArrowDown") { event.preventDefault(); slashSelectedIdx = (slashSelectedIdx + 1) % slashFiltered.length; updateSlashMenu(); return; }
-    if (event.key === "ArrowUp") { event.preventDefault(); slashSelectedIdx = (slashSelectedIdx - 1 + slashFiltered.length) % slashFiltered.length; updateSlashMenu(); return; }
+    if (event.key === "ArrowDown") { event.preventDefault(); slashSelectedIdx = (slashSelectedIdx + 1) % slashFiltered.length; updateSlashSelection(); return; }
+    if (event.key === "ArrowUp") { event.preventDefault(); slashSelectedIdx = (slashSelectedIdx - 1 + slashFiltered.length) % slashFiltered.length; updateSlashSelection(); return; }
     if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
       event.preventDefault();
       promptInput.value = slashFiltered[slashSelectedIdx].name + " ";

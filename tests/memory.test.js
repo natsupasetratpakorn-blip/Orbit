@@ -6,6 +6,8 @@ import {
   transcriptFor,
   mergeUserFacts,
   buildMemoryBlock,
+  buildChatContextPayload,
+  messageNeedsScreen,
   VERBATIM_MESSAGES,
   SUMMARIZE_THRESHOLD
 } from "../src/shared/memory.js";
@@ -91,5 +93,46 @@ describe("buildMemoryBlock", () => {
     expect(block).toContain("Building Orbit");
     expect(block).toContain("Discussed gaming keyboards.");
     expect(block).toContain("MEMORY");
+  });
+
+  it("includes project memory when present", () => {
+    const block = buildMemoryBlock({
+      projectMemory: "Orbit is an Electron app with a floating overlay and full app."
+    });
+
+    expect(block).toContain("Project memory");
+    expect(block).toContain("floating overlay");
+  });
+});
+
+describe("buildChatContextPayload", () => {
+  it("sends only clean unsummarized messages plus chat and project memory", () => {
+    const payload = buildChatContextPayload({
+      messages: [
+        { role: "user", content: "old user" },
+        { role: "assistant", content: "old assistant" },
+        { role: "user", content: "new user" },
+        { role: "assistant", content: "" },
+        { role: "system", content: "ignored" },
+        { role: "assistant", content: "streaming", streaming: true }
+      ],
+      conversationSummary: "Older turns are summarized.",
+      summarizedCount: 2
+    }, {
+      projectMemory: "Project prefers dark UI."
+    });
+
+    expect(payload.messages).toEqual([{ role: "user", content: "new user" }]);
+    expect(payload.conversationSummary).toBe("Older turns are summarized.");
+    expect(payload.projectMemory).toBe("Project prefers dark UI.");
+  });
+});
+
+describe("messageNeedsScreen", () => {
+  it("detects screen-dependent requests without attaching screenshots to ordinary questions", () => {
+    expect(messageNeedsScreen("Can you fix this error on my screen?")).toBe(true);
+    expect(messageNeedsScreen("Read this and explain what it says")).toBe(true);
+    expect(messageNeedsScreen("What is a prime number?")).toBe(false);
+    expect(messageNeedsScreen("How do I write a JavaScript class?")).toBe(false);
   });
 });

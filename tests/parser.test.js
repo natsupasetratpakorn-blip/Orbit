@@ -252,3 +252,26 @@ describe("batch read + open_app tools", () => {
     ]);
   });
 });
+
+describe("web tools", () => {
+  it("parses web search and webpage reading tags", () => {
+    expect(parseAIResponse('<web_search query="Electron BrowserWindow focus rules" />')).toEqual([
+      { type: "web_search", query: "Electron BrowserWindow focus rules" }
+    ]);
+    expect(parseAIResponse('<read_webpage url="https://www.electronjs.org/docs/latest/api/browser-window" />')).toEqual([
+      { type: "read_webpage", url: "https://www.electronjs.org/docs/latest/api/browser-window" }
+    ]);
+  });
+
+  it("parses deep research tags", () => {
+    expect(parseAIResponse('<deep_research query="Electron IPC security best practices" />')).toEqual([
+      { type: "deep_research", query: "Electron IPC security best practices" }
+    ]);
+  });
+
+  it("parses open_url as a browser-opening alias", () => {
+    expect(parseAIResponse('<open_url url="https://example.com/docs" />')).toEqual([
+      { type: "open_url", url: "https://example.com/docs" }
+    ]);
+  });
+});

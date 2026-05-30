@@ -45,7 +45,24 @@
       "Bash(echo \"exit $?\")",
       "Bash(echo \"exit=$?\")",
       "PowerShell(git --no-pager log --oneline -3; \"==== HEAD~1 body ====\"; git --no-pager show -s --format=%B HEAD~1)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "PowerShell(git commit *)",
+      "PowerShell(git --no-pager log --oneline -2; \"---\"; git status --short; \"---tracked graphify \\(should be empty\\)---\"; git ls-files \"*graphify*\")",
+      "PowerShell(\"=== subject ===\")",
+      "PowerShell(\"=== status ===\")",
+      "PowerShell(\"=== tracked graphify \\(want empty\\) ===\")",
+      "Bash(npm run *)",
+      "Bash(grep -iE 'set|\"read_webpage\", *$|web_search\",')",
+      "PowerShell(npx vitest run 2>&1 | Select-Object -Last 40)",
+      "WebFetch(domain:docs.cloud.google.com)",
+      "PowerShell(npx vitest run tests/workspace-security.test.js tests/web-tools.test.js 2>&1 | Select-Object -Last 35)",
+      "PowerShell(npx vitest run 2>&1 | Select-Object -Last 20)",
+      "PowerShell(node --check src/shared/ai-service.js; node --check src/shared/web-tools.js; node --check src/shared/workspace-security.js; if \\($LASTEXITCODE -eq 0\\) { \"syntax OK\" })",
+      "PowerShell(node --check src/shared/workspace-security.js; node --check src/main/main.js; npx vitest run 2>&1 | Select-Object -Last 15)",
+      "PowerShell(node --check gateway/server.js; node --check src/orbit-overlay/app.js; if \\($LASTEXITCODE -eq 0\\) { \"syntax OK\" })",
+      "PowerShell(node --check src/shared/web-tools.js; node --check src/orbit-app/app.js; npx vitest run 2>&1 | Select-Object -Last 20)",
+      "PowerShell(npx vitest run tests/web-tools.test.js 2>&1 | Select-Object -Last 12)",
+      "PowerShell(npx vitest run 2>&1 | Select-Object -Last 5; git remote -v; git branch --show-current; git status --short | Measure-Object -Line)"
     ]
   }
 }

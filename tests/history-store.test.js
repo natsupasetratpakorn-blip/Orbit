@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createHistoryStore } from "../src/shared/history-store.js";
+import { createHistoryStore, pruneStaleToolResults } from "../src/shared/history-store.js";
 import { DEFAULT_MODEL } from "../src/shared/models.js";
 
 let tempDir;
@@ -86,5 +86,28 @@ describe("createHistoryStore", () => {
       conversationSummary: "",
       summarizedCount: 0
     });
+  });
+});
+
+describe("pruneStaleToolResults", () => {
+  it("truncates old tool payloads while preserving recent tool results", () => {
+    const messages = [
+      { role: "user", content: "Question" },
+      { role: "assistant", content: '<read_file path="src/app.js" />' },
+      { role: "user", content: `[TOOL_RESULT: read_file path="src/app.js"]\n${"x".repeat(2000)}` },
+      { role: "assistant", content: "First follow-up" },
+      { role: "user", content: "Next question" },
+      { role: "assistant", content: "Second follow-up" },
+      { role: "user", content: "Another question" },
+      { role: "assistant", content: '<web_search query="Orbit" />' },
+      { role: "user", content: "[TOOL_RESULT] web_search query=\"Orbit\":\nFresh payload" },
+      { role: "assistant", content: "Recent answer" }
+    ];
+
+    const pruned = pruneStaleToolResults(messages, { keepRecentTurns: 4 });
+
+    expect(pruned[2].content).toBe("[TOOL_RESULT: read_file - Output truncated to save memory]");
+    expect(pruned[8].content).toBe("[TOOL_RESULT] web_search query=\"Orbit\":\nFresh payload");
+    expect(messages[2].content).toContain("x".repeat(20));
   });
 });

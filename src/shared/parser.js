@@ -169,6 +169,16 @@ const EXTENDED_TOOLS_RE = new RegExp(
     // <open_app name="Spotify" args="..." /> (aliases launch_app, open_application,
     // start_app) — launch a desktop application by name/path. `args` optional.
     `<(?:open_app|launch_app|open_application|start_app)\\s+name="(?<app_name>[^"]+)"(?:\\s+args="(?<app_args>[^"]*)")?\\s*/>`,
+    // <web_search query="..." /> — search the public web and return compact
+    // title/url/snippet results.
+    `<web_search\\s+query="(?<web_query>[^"]+)"\\s*/>`,
+    // <deep_research query="..." /> — search the public web, read the top
+    // results, and return one consolidated report.
+    `<deep_research\\s+query="(?<deep_query>[^"]+)"\\s*/>`,
+    // <read_webpage url="https://..." /> — fetch and summarize readable page text.
+    `<read_webpage\\s+url="(?<web_read_url>[^"]+)"\\s*/>`,
+    // <open_url url="https://..." /> — explicit URL-opening alias.
+    `<open_url\\s+url="(?<open_url>[^"]+)"\\s*/>`,
     // <read_files glob="src/**/*.js" /> — batch-read every file matching a glob.
     `<(?:read_files|read_many)\\s+glob="(?<rfs_glob>[^"]+)"\\s*/>`,
     // <read_files>path1\npath2\n...</read_files> — batch-read an explicit list
@@ -206,6 +216,14 @@ export function parseExtendedTools(text) {
       out.push({ type: "git_log", count: g.gl_count ? parseInt(g.gl_count, 10) : undefined });
     } else if (g.app_name) {
       out.push({ type: "open_app", name: g.app_name, args: g.app_args || "" });
+    } else if (g.web_query) {
+      out.push({ type: "web_search", query: g.web_query });
+    } else if (g.deep_query) {
+      out.push({ type: "deep_research", query: g.deep_query });
+    } else if (g.web_read_url) {
+      out.push({ type: "read_webpage", url: g.web_read_url });
+    } else if (g.open_url) {
+      out.push({ type: "open_url", url: g.open_url });
     } else if (g.rfs_glob) {
       out.push({ type: "read_files", glob: g.rfs_glob, paths: [] });
     } else if (g.rfs_body !== undefined) {

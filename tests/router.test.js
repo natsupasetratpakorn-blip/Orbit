@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_MODEL_ID, MODEL_IDS, normalizeModel, routeAutoModel } from "../src/shared/models.js";
-import { DEFAULT_MODEL_ID as GATEWAY_DEFAULT_MODEL_ID } from "../gateway/config.js";
+import { DEFAULT_MODEL_ID as GATEWAY_DEFAULT_MODEL_ID, MODEL_IDS as GATEWAY_MODEL_IDS } from "../gateway/config.js";
 
 describe("routeAutoModel", () => {
   it("sends planning mode to Orchestra", () => {
@@ -34,5 +34,6 @@ describe("routeAutoModel", () => {
     expect(DEFAULT_MODEL_ID).toBe(MODEL_IDS[DEFAULT_MODEL]);
     expect(DEFAULT_MODEL_ID).toBe("gemini-2.5-flash");
     expect(GATEWAY_DEFAULT_MODEL_ID).toBe(DEFAULT_MODEL_ID);
+    expect(GATEWAY_MODEL_IDS).toBe(MODEL_IDS);
   });
 });

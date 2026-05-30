@@ -33,7 +33,12 @@
           <button type="button" class="menu-item" data-menu="view">View</button>
           <button type="button" class="menu-item" data-menu="window">Window</button>
           <div id="menuDropdown" class="menu-dropdown" hidden></div>
-          <button id="viewModeButton" class="view-mode-button" type="button" title="Switch to floating overlay">↗ Overlay</button>
+          <button id="viewModeButton" class="view-mode-button" type="button" title="Switch to floating overlay">
+            <span class="button-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M7 17 17 7"></path><path d="M9 7h8v8"></path><path d="M5 11v8h8"></path></svg>
+            </span>
+            <span>Overlay</span>
+          </button>
         </nav>
         <div class="window-controls" aria-label="Window controls">
           <button id="minimizeWindow" type="button" aria-label="Minimize">─</button>
@@ -45,15 +50,21 @@
       <aside class="sidebar" aria-label="Orbit navigation">
         <div class="sidebar-top-actions">
           <button id="newChatButton" class="primary-nav-button" type="button">
-            <span class="plus">+</span>
+            <span class="plus" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+            </span>
             <span>New Conversation</span>
           </button>
           <button id="historyButton" class="nav-button" type="button">
-            <span class="nav-icon">◷</span>
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 4v6h6"></path><path d="M12 7v5l3 2"></path></svg>
+            </span>
             <span>History</span>
           </button>
           <button id="tasksButton" class="nav-button" type="button">
-            <span class="nav-icon">◧</span>
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"></rect><rect x="13" y="4" width="7" height="7" rx="2"></rect><rect x="4" y="13" width="7" height="7" rx="2"></rect><path d="M15 17h5"></path><path d="M17.5 14.5v5"></path></svg>
+            </span>
             <span>Background Agents</span>
           </button>
         </div>
@@ -62,7 +73,9 @@
           <div class="section-heading">
             <span>Projects</span>
             <div class="section-actions">
-              <button id="addProjectButton" type="button" aria-label="Add project" title="New project">+</button>
+              <button id="addProjectButton" type="button" aria-label="Add project" title="New project">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              </button>
             </div>
           </div>
           <div id="projectsList" class="projects-list"></div>
@@ -72,7 +85,9 @@
           <div class="section-heading">
             <span>Project Files</span>
             <div class="section-actions">
-              <button id="addFileButton" type="button" aria-label="Attach file to project" title="Attach file">+</button>
+              <button id="addFileButton" type="button" aria-label="Attach file to project" title="Attach file">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              </button>
             </div>
           </div>
           <div id="filesList" class="files-list"></div>
@@ -87,7 +102,9 @@
 
         <div class="sidebar-footer">
           <button id="settingsButton" class="nav-button" type="button">
-            <span class="nav-icon">⚙</span>
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 6.1 3.3l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1Z"></path></svg>
+            </span>
             <span>Settings</span>
           </button>
         </div>
@@ -99,7 +116,7 @@
             <button id="activeProjectButton" class="project-chip" type="button">
               <span class="folder-mark"></span>
               <span id="activeProjectName">Orbit</span>
-              <span class="chevron">⌄</span>
+              <span class="chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span>
             </button>
             <div class="chat-header-spacer"></div>
             <div class="chat-header-stats">
@@ -123,12 +140,16 @@
             <div id="attachedFilesRow" class="attached-files-row" hidden></div>
             <div id="slashMenu" class="slash-menu" hidden></div>
 
-            <textarea id="promptInput" rows="2" placeholder="Ask anything · @ to mention · / for actions" aria-label="Message"></textarea>
+            <textarea id="promptInput" rows="2" placeholder="Ask anything · @ to mention · / for actions" aria-label="Message" aria-controls="slashMenu" aria-expanded="false"></textarea>
 
             <div class="composer-toolbar">
               <div class="composer-left">
-                <button id="attachButton" type="button" class="round-button" aria-label="Attach files" title="Attach file or screenshot">+</button>
-                <button id="regionButton" type="button" class="round-button" aria-label="Capture region" title="Capture screen region">▭</button>
+                <button id="attachButton" type="button" class="round-button" aria-label="Attach files" title="Attach file or screenshot">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+                </button>
+                <button id="regionButton" type="button" class="round-button" aria-label="Capture region" title="Capture screen region">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4"></path><path d="M15 4h4a1 1 0 0 1 1 1v4"></path><path d="M20 15v4a1 1 0 0 1-1 1h-4"></path><path d="M9 20H5a1 1 0 0 1-1-1v-4"></path><rect x="8" y="8" width="8" height="8" rx="1"></rect></svg>
+                </button>
                 <div class="custom-select-container" id="appModelSelectContainer">
                   <button id="modelSelectBtn" type="button" class="model-pill" aria-label="AI model">
                     <span id="modelSelectLabel">Voyager 1</span> <span class="chevron-tiny">▾</span>
@@ -173,10 +194,17 @@
                     </div>
                   </div>
                 </div>
-                <button id="modeButton" type="button" class="mode-pill" data-mode="ask" title="Switch mode (Ask / Agents / Planning)">❯ Ask</button>
+                <button id="modeButton" type="button" class="mode-pill" data-mode="ask" title="Switch mode (Ask / Agents / Planning)">
+                  <span class="mode-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M4 12h13"></path><path d="m12 7 5 5-5 5"></path></svg>
+                  </span>
+                  <span>Ask</span>
+                </button>
               </div>
               <div class="composer-right">
-                <button id="screenshotToggleButton" type="button" class="round-button" aria-label="Toggle screenshot context" title="Auto-attach screenshot">▦</button>
+                <button id="screenshotToggleButton" type="button" class="round-button" aria-label="Toggle screenshot context" aria-pressed="false" title="Smart screen context">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M8 9h8"></path><path d="M8 13h5"></path><circle cx="16.5" cy="15.5" r="1.5"></circle></svg>
+                </button>
                 <canvas id="micVisualizer" class="mic-visualizer" hidden></canvas>
                 <button id="micButton" type="button" class="round-button" aria-label="Voice input" title="Voice input">
                   <svg viewBox="0 0 24 24" aria-hidden="true">

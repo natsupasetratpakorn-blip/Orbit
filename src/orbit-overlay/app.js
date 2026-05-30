@@ -1,6 +1,8 @@
 import { parseAIResponse, renderMarkdown, computeLineDiff, parseQuestions } from "../shared/parser.js";
+import { buildInlineToolBadges, streamingToolDisplay } from "../shared/tool-ui.js";
+import { parseSlashToolCommand, TOOL_SLASH_COMMANDS } from "../shared/slash-tools.js";
 import { transcribeWithWhisper, warmupWhisper } from "./whisper.js";
-import { unsummarizedTail, planSummarization, transcriptFor } from "../shared/memory.js";
+import { messageNeedsScreen, unsummarizedTail, planSummarization, transcriptFor } from "../shared/memory.js";
 import { DEFAULT_MODEL, MODEL_IDS, MODELS } from "../shared/models.js";
 
 // Element Selectors
@@ -203,6 +205,18 @@ let workspacePath = "";
 let workspaceFiles = [];
 let selectedFiles = new Set();
 let cardExecutionStates = {}; // key: messageId-type-path -> { status, output, error, exitCode }
+const READ_ONLY_TOOLS = new Set([
+  "read_file", "list_workspace", "list_windows", "search_workspace",
+  "list_dir", "git_status", "git_diff", "git_log", "web_search", "deep_research", "read_webpage"
+]);
+const AUTO_RUN_IN_AGENT_MODE = new Set([
+  "execute_command", "write_file", "patch_file",
+  "type_text", "click_pixel", "scroll", "keystroke", "focus_window", "wait_ms",
+  "open_browser", "open_url", "open_app", "deploy_agent",
+  "delete_file", "move_file", "create_directory"
+  // deep_research is intentionally NOT here — it's a READ_ONLY_TOOL, so it
+  // already auto-runs in every mode. Listing it twice was redundant.
+]);
 let panelWidthMode = "standard"; // "standard" (600px) or "wide" (850px)
 let autoSpeakEnabled = false;
 let recognition = null;
@@ -374,7 +388,7 @@ function aiStreamTick() {
   const charsThisFrame = Math.max(1, Math.ceil(remaining / 18));
   aiStreamDisplayedLen = Math.min(aiStreamTargetText.length, aiStreamDisplayedLen + charsThisFrame);
 
-  aiStreamTargetEl.textContent = aiStreamTargetText.slice(0, aiStreamDisplayedLen);
+  renderStreamingTextContent(aiStreamTargetEl, aiStreamTargetText.slice(0, aiStreamDisplayedLen));
   // Keep the latest text in view inside the chat scroller.
   messages.scrollTop = messages.scrollHeight;
 
@@ -404,7 +418,7 @@ function endAIStream() {
     aiStreamRaf = null;
   }
   if (aiStreamTargetEl && aiStreamDisplayedLen < aiStreamTargetText.length) {
-    aiStreamTargetEl.textContent = aiStreamTargetText;
+    renderStreamingTextContent(aiStreamTargetEl, aiStreamTargetText);
   }
   aiStreamTargetEl = null;
   aiStreamTargetText = "";
@@ -1255,6 +1269,131 @@ function isSummonAgentsAuthorized() {
   return false;
 }
 
+const SVG_ICONS = {
+  command: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`,
+  file: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+  folder: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  search: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>`,
+  globe: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  mouse: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="7"></rect><line x1="12" y1="6" x2="12" y2="10"></line></svg>`,
+  window: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>`,
+  bot: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>`,
+  trash: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+  move: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"></polyline><polyline points="9 5 12 2 15 5"></polyline><polyline points="19 9 22 12 19 15"></polyline><polyline points="9 19 12 22 15 19"></polyline><line x1="2" y1="12" x2="22" y2="12"></line><line x1="12" y1="2" x2="12" y2="22"></line></svg>`,
+  git: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9v6"></path><path d="M6 9v3a3 3 0 0 0 3 3h6"></path></svg>`,
+  book: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>`,
+  link: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`,
+  gear: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`,
+  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+};
+
+const TOOL_ICON = {
+  execute_command: SVG_ICONS.command,
+  write_file: SVG_ICONS.file,
+  patch_file: SVG_ICONS.file,
+  read_file: SVG_ICONS.file,
+  list_workspace: SVG_ICONS.folder,
+  list_windows: SVG_ICONS.window,
+  search_workspace: SVG_ICONS.search,
+  type_text: SVG_ICONS.command,
+  click_pixel: SVG_ICONS.mouse,
+  scroll: SVG_ICONS.mouse,
+  keystroke: SVG_ICONS.command,
+  focus_window: SVG_ICONS.window,
+  wait_ms: SVG_ICONS.command,
+  open_browser: SVG_ICONS.globe,
+  deploy_agent: SVG_ICONS.bot,
+  list_dir: SVG_ICONS.folder,
+  delete_file: SVG_ICONS.trash,
+  move_file: SVG_ICONS.move,
+  create_directory: SVG_ICONS.folder,
+  git_status: SVG_ICONS.git,
+  git_diff: SVG_ICONS.git,
+  git_log: SVG_ICONS.git,
+  web_search: SVG_ICONS.globe,
+  deep_research: SVG_ICONS.search,
+  read_webpage: SVG_ICONS.book,
+  open_url: SVG_ICONS.link,
+  open_app: SVG_ICONS.window
+};
+
+const INLINE_TOOL_ICON = {
+  terminal: SVG_ICONS.command,
+  edit: SVG_ICONS.file,
+  read: SVG_ICONS.book,
+  research: SVG_ICONS.globe,
+  action: SVG_ICONS.mouse,
+  agent: SVG_ICONS.bot
+};
+
+function renderInlineToolBadges(parts, statusForPart = () => "running") {
+  const row = document.createElement("div");
+  row.className = "inline-tool-row";
+  const badges = buildInlineToolBadges(parts, statusForPart);
+  badges.forEach((badge) => {
+    const el = document.createElement("span");
+    el.className = `inline-tool-badge inline-tool-${badge.kind}`;
+    el.innerHTML = `<span class="inline-tool-icon">${INLINE_TOOL_ICON[badge.kind] || SVG_ICONS.gear}</span><span></span>`;
+    el.querySelector("span:last-child").textContent = badge.label;
+    row.append(el);
+  });
+  return row;
+}
+
+function renderThinkingBlock(toolGroup, messageId) {
+  const details = document.createElement("details");
+  const hasRunning = toolGroup.some(({ part, partIndex }) => {
+    const cardKey = `${messageId}-${part.type}-${part.path || "command"}-${partIndex}`;
+    const status = cardExecutionStates[cardKey]?.status;
+    return !status || status === "pending" || status === "working";
+  });
+  // Only spin while tools are actually running. Otherwise the spinner animation
+  // ran forever next to "Thought process" — looked like an endless loop.
+  details.className = `thinking-block ${hasRunning ? "is-running" : "is-complete"}`;
+
+  const summary = document.createElement("summary");
+  const statusIcon = hasRunning
+    ? `<span class="thinking-spinner" aria-hidden="true"></span>`
+    : `<span class="thinking-done" aria-hidden="true">${SVG_ICONS.check}</span>`;
+  summary.innerHTML = `
+    ${statusIcon}
+    <span>${hasRunning ? "Orbit is thinking..." : "Thought process"}</span>
+    <span class="thinking-count">${toolGroup.length} tool${toolGroup.length === 1 ? "" : "s"}</span>
+  `;
+  details.append(summary);
+
+  const body = document.createElement("div");
+  body.className = "thinking-body";
+  toolGroup.forEach(({ part, partIndex }) => {
+    body.append(renderActionCard(part, messageId, partIndex));
+  });
+  details.append(body);
+  return details;
+}
+
+function renderStreamingTextContent(targetEl, rawText) {
+  if (!targetEl) return;
+  const display = streamingToolDisplay(rawText || "");
+  targetEl.innerHTML = "";
+  if (display.text) {
+    const text = document.createElement("span");
+    text.innerHTML = renderMarkdown(display.text);
+    targetEl.append(text);
+  }
+  if (display.badges.length) {
+    const row = document.createElement("span");
+    row.className = "inline-tool-row inline-tool-row-stream";
+    display.badges.forEach((badge) => {
+      const el = document.createElement("span");
+      el.className = `inline-tool-badge inline-tool-${badge.kind} is-live`;
+      el.innerHTML = `<span class="inline-tool-icon">${INLINE_TOOL_ICON[badge.kind] || SVG_ICONS.gear}</span><span></span>`;
+      el.querySelector("span:last-child").textContent = badge.label;
+      row.append(el);
+    });
+    targetEl.append(row);
+  }
+}
+
 function renderActionCard(part, messageId, partIndex) {
   const cardKey = `${messageId}-${part.type}-${part.path || "command"}-${partIndex}`;
   const cardState = cardExecutionStates[cardKey] || (cardExecutionStates[cardKey] = { status: "pending" });
@@ -1277,6 +1416,8 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "list" :
     part.type === "wait_ms" ? "read" :
     part.type === "open_browser" ? "browser" :
+    part.type === "open_url" ? "browser" :
+    part.type === "web_search" || part.type === "deep_research" || part.type === "read_webpage" ? "read" :
     part.type === "open_app" ? "browser" :
     part.type === "delete_file" ? "write" :
     part.type === "move_file" ? "write" :
@@ -1297,6 +1438,10 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? "Focus Window" :
     part.type === "wait_ms" ? "Wait" :
     part.type === "open_browser" ? "Open Browser" :
+    part.type === "open_url" ? "Open URL" :
+    part.type === "web_search" ? "Web Search" :
+    part.type === "deep_research" ? "Deep Research" :
+    part.type === "read_webpage" ? "Read Webpage" :
     part.type === "open_app" ? "Open App" :
     part.type === "list_dir" ? "List Directory" :
     part.type === "delete_file" ? "Delete File" :
@@ -1311,7 +1456,9 @@ function renderActionCard(part, messageId, partIndex) {
 
   const typeSpan = document.createElement("span");
   typeSpan.className = `action-card-type ${typeClass}`;
-  typeSpan.textContent = typeLabel;
+
+  const icon = TOOL_ICON[part.type] || "⚙️";
+  typeSpan.innerHTML = `<span style="margin-right: 6px;">${icon}</span>${typeLabel}`;
 
   const pathSpan = document.createElement("span");
   pathSpan.className = "action-card-path";
@@ -1323,6 +1470,8 @@ function renderActionCard(part, messageId, partIndex) {
     part.type === "focus_window" ? `"${part.window || ""}"` :
     part.type === "wait_ms" ? `${part.ms}ms` :
     part.type === "open_browser" ? part.url :
+    part.type === "open_url" || part.type === "read_webpage" ? part.url :
+    part.type === "web_search" || part.type === "deep_research" ? `"${part.query || ""}"` :
     part.type === "open_app" ? `${part.name}${part.args ? ` ${part.args}` : ""}` :
     part.type === "list_windows" ? "Active Application Windows" :
     part.type === "deploy_agent" ? "Autonomous Background Agent" :
@@ -1700,7 +1849,22 @@ function renderActionCard(part, messageId, partIndex) {
         }
       }
     }
-  } else if (part.type === "open_browser") {
+  } else if (part.type === "web_search") {
+    const desc = document.createElement("div");
+    desc.className = "action-card-description";
+    desc.textContent = `Searching the web for:\n"${part.query}"`;
+    body.append(desc);
+  } else if (part.type === "deep_research") {
+    const desc = document.createElement("div");
+    desc.className = "action-card-description";
+    desc.textContent = `Researching the web and reading top results for:\n"${part.query}"`;
+    body.append(desc);
+  } else if (part.type === "read_webpage") {
+    const desc = document.createElement("div");
+    desc.className = "action-card-description";
+    desc.textContent = `Reading webpage:\n"${part.url}"`;
+    body.append(desc);
+  } else if (part.type === "open_browser" || part.type === "open_url") {
     const desc = document.createElement("div");
     desc.className = "action-card-description";
     desc.textContent = `Opening URL:\n"${part.url}"`;
@@ -1751,6 +1915,10 @@ function renderActionCard(part, messageId, partIndex) {
         part.type === "list_windows" ? "List" :
         part.type === "click_pixel" ? "Click" :
         part.type === "open_browser" ? "Open" :
+        part.type === "open_url" ? "Open" :
+        part.type === "web_search" ? "Search" :
+        part.type === "deep_research" ? "Research" :
+        part.type === "read_webpage" ? "Read" :
         part.type === "deploy_agent" ? "Deploy" : "Load";
 
       if (part.type === "deploy_agent") {
@@ -1926,6 +2094,17 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// Compact web-search results into text the AI can act on next turn.
+function formatWebResultsForAI(results) {
+  if (!Array.isArray(results) || results.length === 0) return "(no web results)";
+  return results.slice(0, 8).map((r, idx) => [
+    `${idx + 1}. ${r.title}`,
+    `URL: ${r.url}`,
+    r.source ? `Source: ${r.source}` : "",
+    r.snippet ? `Snippet: ${r.snippet}` : ""
+  ].filter(Boolean).join("\n")).join("\n\n");
 }
 
 async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
@@ -2226,6 +2405,45 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
       cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to open browser" };
       toolResult = `[TOOL_RESULT] open_browser FAILED: ${res?.error || "Failed to open browser"}`;
     }
+  } else if (part.type === "open_url") {
+    const res = await window.orbit.openBrowser({ url: part.url });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] open_url: Opened URL "${part.url}" successfully.`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "Failed to open URL" };
+      toolResult = `[TOOL_RESULT] open_url FAILED: ${res?.error || "Failed to open URL"}`;
+    }
+  } else if (part.type === "web_search") {
+    const res = await window.orbit.webSearch({ query: part.query });
+    if (res && res.ok) {
+      const results = Array.isArray(res.results) ? res.results : [];
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", results };
+      toolResult = `[TOOL_RESULT] web_search query="${part.query}":\n${formatWebResultsForAI(results)}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "web search failed" };
+      toolResult = `[TOOL_RESULT] web_search FAILED: ${res?.error || "web search failed"}`;
+    }
+  } else if (part.type === "deep_research") {
+    const res = await window.orbit.deepSearch({ query: part.query });
+    if (res && res.ok) {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success", output: res.report || "" };
+      toolResult = `[TOOL_RESULT] deep_research query="${part.query}":\n${res.report || "(no report returned)"}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "deep research failed" };
+      toolResult = `[TOOL_RESULT] deep_research FAILED: ${res?.error || "deep research failed"}`;
+    }
+  } else if (part.type === "read_webpage") {
+    const res = await window.orbit.readWebpage({ url: part.url });
+    if (res && res.ok) {
+      const text = `${res.text || "(no readable text)"}`;
+      const capped = text.length > 8000 ? `${text.slice(0, 8000)}\n\n[…truncated…]` : text;
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "success" };
+      toolResult = `[TOOL_RESULT] read_webpage url="${part.url}":\nTitle: ${res.title || part.url}\nURL: ${res.url || part.url}\n\n${capped}${res.truncated ? "\n\n[Page text truncated]" : ""}`;
+    } else {
+      cardExecutionStates[cardKey] = { ...cardExecutionStates[cardKey], status: "error", error: res?.error || "read_webpage failed" };
+      toolResult = `[TOOL_RESULT] read_webpage FAILED: ${res?.error || "read_webpage failed"}`;
+    }
   } else if (part.type === "open_app") {
     const res = await window.orbit.openApp({ name: part.name, args: part.args });
     if (res && res.ok) {
@@ -2304,7 +2522,7 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
   }
   renderMessages();
 
-  if (agentMode && messageId) {
+  if (messageId) {
     const msg = chatMessages.find(m => m.id === messageId);
     if (msg) {
       const msgParts = parseAIResponse(msg.content);
@@ -2317,12 +2535,17 @@ async function runActionCard(part, cardKey, statusSpan, approveBtn, messageId) {
 
       if (allDone) {
         const hasDeployAgent = toolParts.some(p => p.type === "deploy_agent");
+        // Continue the turn in agent mode, OR when the message only used
+        // read-only tools (web_search / read_webpage / read_file, etc.) that
+        // auto-run even in ask mode. Otherwise the AI never sees the tool
+        // result and the conversation dead-ends right after the tool runs.
+        const allReadOnly = toolParts.length > 0 && toolParts.every(p => READ_ONLY_TOOLS.has(p.type));
         const results = toolParts.map((p, idx) => {
           const key = `${messageId}-${p.type}-${p.path || "command"}-${idx}`;
           return cardExecutionStates[key]?.toolResult;
         }).filter(Boolean);
 
-        if (results.length > 0 && !hasDeployAgent) {
+        if (results.length > 0 && !hasDeployAgent && (agentMode || allReadOnly)) {
           await sendToolResult(results.join("\n\n"));
         }
       }
@@ -2834,33 +3057,51 @@ function renderAssistantMessage(message, container) {
   const parts = parseAIResponse(message.content);
 
   let partIndex = 0;
+  let toolGroup = [];
+  const flushToolGroup = () => {
+    if (!toolGroup.length) return;
+    container.append(renderInlineToolBadges(
+      toolGroup.map((item) => item.part),
+      (part, idx) => {
+        const item = toolGroup[idx];
+        const key = `${message.id}-${item.part.type}-${item.part.path || "command"}-${item.partIndex}`;
+        return cardExecutionStates[key]?.status || "running";
+      }
+    ));
+    container.append(renderThinkingBlock(toolGroup, message.id));
+    toolGroup = [];
+  };
+
   for (const part of parts) {
     if (part.type === "text") {
+      flushToolGroup();
       appendTextWithFlashcards(container, part.content, message.id);
     } else if (part.type === "ask_user_questions") {
+      flushToolGroup();
       container.append(renderAskUserQuestionsCard(part, message.id));
     } else {
-      const card = renderActionCard(part, message.id, partIndex);
-      container.append(card);
+      toolGroup.push({ part, partIndex });
       partIndex++;
     }
   }
+  flushToolGroup();
 
 
   // Auto Mode: kick off any still-pending action cards immediately, without
   // waiting for a click. Runs at most one action per render to avoid races —
   // the next card will fire after the tool result comes back and re-renders.
-  if (autoMode) {
+  if (autoMode || agentMode || parts.some((part) => READ_ONLY_TOOLS.has(part.type))) {
     let loopPartIndex = 0;
     for (const part of parts) {
-      if (part.type === "text") continue;
+      if (part.type === "text" || part.type === "ask_user_questions") continue;
       if (part.type === "deploy_agent" && !isSummonAgentsAuthorized()) {
         loopPartIndex++;
         continue;
       }
       const cardKey = `${message.id}-${part.type}-${part.path || "command"}-${loopPartIndex}`;
       const state = cardExecutionStates[cardKey];
-      if (!state || state.status === "pending") {
+      const canAuto = autoMode || READ_ONLY_TOOLS.has(part.type) || (agentMode && AUTO_RUN_IN_AGENT_MODE.has(part.type));
+      if (canAuto && (!state || state.status === "pending")) {
         // Claim the card synchronously so a second render can't double-fire.
         cardExecutionStates[cardKey] = { status: "working", queued: true };
         // Defer so the DOM commits before we mutate state.
@@ -2997,30 +3238,43 @@ function renderMessages() {
   }
 }
 
-// Decide whether a message actually needs a screen grab. Screen context is
-// ambient — most questions (math, definitions, coding, writing) don't need it.
-// We only auto-capture when the user's wording points at what's on screen, so
-// general questions aren't answered as "that text isn't in the screenshot".
-function messageNeedsScreen(text) {
-  if (!text) return false;
-  const t = text.toLowerCase();
-  // Explicit screen/desktop references — always capture.
-  if (/\b(my screen|on screen|on-screen|the screen|my desktop|this screenshot|the screenshot|what app|which app|what window|currently (open|showing|on|displayed))\b/.test(t)) {
-    return true;
-  }
-  // Deictic pointer ("this/that/here/it") combined with a verb/noun that only
-  // makes sense relative to something visible ("fix this error", "what does
-  // this say", "solve this", "translate this", "explain this code").
-  const hasDeictic = /\b(this|that|these|those|here)\b/.test(t);
-  const hasVisualRef = /\b(screen|error|bug|code|page|window|line|function|image|picture|diagram|question|problem|highlighted|selected|above|below|shown|displayed|says?|see|look|read|solve|translate|summari[sz]e?|explain|fix|describe|what'?s)\b/.test(t);
-  return hasDeictic && hasVisualRef;
-}
-
 // Send Chat Message
 async function sendMessage(content) {
   closeModelDropdown();
-  const trimmed = content.trim();
+  let trimmed = content.trim();
   if (!trimmed) {
+    return;
+  }
+
+  const slashToolRequest = parseSlashToolCommand(trimmed);
+  if (slashToolRequest?.error) {
+    toast(slashToolRequest.error, { variant: "error" });
+    resetInputState();
+    return;
+  }
+  if (slashToolRequest) {
+    agentStepsThisTurn = 0;
+    const now = new Date().toISOString();
+    chatMessages = [...chatMessages, {
+      id: createId(),
+      role: "user",
+      content: trimmed,
+      timestamp: now,
+      model: selectedModel
+    }, {
+      id: createId(),
+      role: "assistant",
+      content: slashToolRequest.assistantContent,
+      timestamp: now,
+      model: selectedModel
+    }];
+    promptInput.value = "";
+    selectedFiles.clear();
+    renderFilesList();
+    renderContextTray();
+    renderMessages();
+    setOverlayState("expanded");
+    try { await persistHistory(); } catch (e) { console.warn("persistHistory failed:", e); }
     return;
   }
 
@@ -3629,6 +3883,7 @@ const SLASH_COMMANDS = [
     template: "/refactor — Refactor this for readability and maintainability without changing behavior. Explain each change briefly." },
   { name: "/summarize", desc: "Ask Orbit to summarize a long doc or chat",
     template: "/summarize — Give me a tight bullet-point summary of the attached content." },
+  ...TOOL_SLASH_COMMANDS.map(({ name, desc, template }) => ({ name, desc, template })),
   { name: "/goal", desc: "Start an extra thorough long-running autonomous background task" },
   { name: "/schedule", desc: "Schedule an action or set a timer schedule" },
   { name: "/grill-me", desc: "Run an interactive design review interview" },
@@ -3938,7 +4193,24 @@ function updateAtMenu() {
       selectAtFile(filteredAtFiles[idx]);
     });
   });
+
+  const selectedEl = slashMenuEl.querySelector(".slash-item.is-active");
+  if (selectedEl) {
+    selectedEl.scrollIntoView({ block: "nearest" });
+  }
   return true;
+}
+
+function updateAtSelection() {
+  const items = slashMenuEl.querySelectorAll(".slash-item");
+  items.forEach((el, i) => {
+    if (i === selectedAtIndex) {
+      el.classList.add("is-active");
+      el.scrollIntoView({ block: "nearest" });
+    } else {
+      el.classList.remove("is-active");
+    }
+  });
 }
 
 function selectAtFile(file) {
@@ -3985,6 +4257,11 @@ function updateSlashMenu() {
       `).join("");
       
       slashMenuEl.style.display = "block";
+
+      const selectedEl = slashMenuEl.querySelector(".slash-item.is-active");
+      if (selectedEl) {
+        selectedEl.scrollIntoView({ block: "nearest" });
+      }
       
       // Wire up clicks
       slashMenuEl.querySelectorAll(".slash-item").forEach(item => {
@@ -3998,6 +4275,18 @@ function updateSlashMenu() {
   }
   
   hideSlashMenu();
+}
+
+function updateSlashSelection() {
+  const items = slashMenuEl.querySelectorAll(".slash-item");
+  items.forEach((el, i) => {
+    if (i === selectedSlashIndex) {
+      el.classList.add("is-active");
+      el.scrollIntoView({ block: "nearest" });
+    } else {
+      el.classList.remove("is-active");
+    }
+  });
 }
 
 function hideSlashMenu() {
@@ -4354,12 +4643,12 @@ promptInput.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       selectedAtIndex = (selectedAtIndex + 1) % filteredAtFiles.length;
-      updateAtMenu();
+      updateAtSelection();
       return;
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       selectedAtIndex = (selectedAtIndex - 1 + filteredAtFiles.length) % filteredAtFiles.length;
-      updateAtMenu();
+      updateAtSelection();
       return;
     } else if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
@@ -4376,11 +4665,11 @@ promptInput.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       selectedSlashIndex = (selectedSlashIndex + 1) % filteredSlashCommands.length;
-      updateSlashMenu();
+      updateSlashSelection();
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       selectedSlashIndex = (selectedSlashIndex - 1 + filteredSlashCommands.length) % filteredSlashCommands.length;
-      updateSlashMenu();
+      updateSlashSelection();
     } else if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
       selectSlashCommand(filteredSlashCommands[selectedSlashIndex].name);

@@ -161,6 +161,10 @@
         </div>
 
         <div class="demo reveal">
+          <div class="demo-scenario-toggle" id="demoScenarioToggle" role="tablist">
+            <button class="scenario-btn is-active" data-scenario="coding" role="tab" aria-selected="true">Local Coding</button>
+            <button class="scenario-btn" data-scenario="web" role="tab" aria-selected="false">Web Search</button>
+          </div>
           <div class="demo-window">
             <div class="window-bar">
               <span class="brand-mark sm"><span class="brand-core"></span></span>
@@ -181,12 +185,18 @@
           </div>
           <div class="demo-side">
             <h3>What you're seeing</h3>
-            <ul class="demo-list" id="demoList">
+            <ul class="demo-list is-active" id="demoListCoding">
               <li data-step="0">Screen captured for context</li>
               <li data-step="1">Workspace searched &amp; read</li>
               <li data-step="2">File patched surgically</li>
               <li data-step="3">Tests run in your shell</li>
               <li data-step="4">Summary reported back</li>
+            </ul>
+            <ul class="demo-list" id="demoListWeb" style="display: none;">
+              <li data-step="0">Search web for query</li>
+              <li data-step="1">Read top result pages</li>
+              <li data-step="2">Extract missing information</li>
+              <li data-step="3">Summary reported back</li>
             </ul>
             <a href="#download" class="btn btn-solid magnetic">Try it yourself</a>
           </div>
@@ -251,6 +261,24 @@
             <h3>Two surfaces</h3>
             <p>A quiet floating overlay for quick asks, or the full standalone app for deep work. Switch in a click.</p>
           </article>
+        </div>
+      </section>
+
+      <!-- ─── Presets ───────────────────────────────────────────────── -->
+      <section class="section" id="presets">
+        <div class="section-head reveal">
+          <span class="eyebrow">Presets</span>
+          <h2>One assistant, many minds.</h2>
+          <p>Flip a preset and Orbit's whole personality and prompt re-tune around your task.</p>
+        </div>
+        <div class="presets reveal">
+          <div class="preset-card"><span class="preset-icon">✦</span><h3>General</h3><p>Balanced everyday assistant.</p></div>
+          <div class="preset-card"><span class="preset-icon">⌘</span><h3>Coding</h3><p>Senior software engineer.</p></div>
+          <div class="preset-card"><span class="preset-icon">🎓</span><h3>Teaching</h3><p>Patient tutor that explains and quizzes.</p></div>
+          <div class="preset-card"><span class="preset-icon">❓</span><h3>Interviewer</h3><p>Socratic questioner to test your knowledge.</p></div>
+          <div class="preset-card"><span class="preset-icon">🛠️</span><h3>Creator</h3><p>Creative builder and brainstormer.</p></div>
+          <div class="preset-card"><span class="preset-icon">∑</span><h3>Math</h3><p>Rigorous step-by-step problem solver.</p></div>
+          <div class="preset-card"><span class="preset-icon">✍</span><h3>Writing</h3><p>Editor for clear, polished prose.</p></div>
         </div>
       </section>
 
@@ -402,6 +430,19 @@
 
         <div class="pricing">
           <article class="plan tilt reveal">
+            <div class="plan-head"><span class="plan-glyph">✧</span><h3>Free</h3></div>
+            <p class="plan-tag">Get started at no cost.</p>
+            <div class="plan-price"><span class="plan-cur">฿</span><span class="plan-amt" data-m="0" data-y="0">0</span><span class="plan-per">/mo</span></div>
+            <ul class="plan-feats">
+              <li>Auto model</li>
+              <li>Read-only workspace tools</li>
+              <li>Basic web search</li>
+              <li>50 messages / day</li>
+            </ul>
+            <a href="mailto:minecraft.mashermc@gmail.com?subject=Orbit%20%E2%80%94%20Free%20plan" class="btn btn-ghost plan-cta">Contact M4sh3r</a>
+          </article>
+
+          <article class="plan tilt reveal">
             <div class="plan-head"><span class="plan-glyph">↑</span><h3>Liftoff</h3></div>
             <p class="plan-tag">Get the mission off the ground.</p>
             <div class="plan-price"><span class="plan-cur">฿</span><span class="plan-amt" data-m="189" data-y="151">189</span><span class="plan-per">/mo</span></div>
@@ -465,22 +506,22 @@
             <thead>
               <tr>
                 <th class="compare-feat">Compare plans</th>
-                <th>Liftoff</th><th>Orbit</th><th>Deep Space</th><th>Interstellar</th>
+                <th>Free</th><th>Liftoff</th><th>Orbit</th><th>Deep Space</th><th>Interstellar</th>
               </tr>
             </thead>
             <tbody>
-              <tr><td>Monthly price (THB)</td><td>฿189</td><td>฿299</td><td>฿450</td><td>฿599</td></tr>
-              <tr><td>Screen context &amp; region capture</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Offline local voice</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Models</td><td>Auto · V1 Flash</td><td>+ V1 · V2</td><td>+ V2 Pro</td><td>+ V2.1 · Orchestra</td></tr>
-              <tr><td>Agents mode (edit &amp; run)</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Presets</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Image / PDF / code attachments</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Background autonomous agents</td><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Desktop automation</td><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
-              <tr><td>Daily message limit</td><td>50</td><td>200</td><td>600</td><td>Unlimited</td></tr>
-              <tr><td>Priority routing &amp; early access</td><td>—</td><td>—</td><td>—</td><td>✓</td></tr>
-              <tr><td>Support</td><td>Community</td><td>Email</td><td>Priority</td><td>Direct (M4sh3r)</td></tr>
+              <tr><td>Monthly price (THB)</td><td>฿0</td><td>฿189</td><td>฿299</td><td>฿450</td><td>฿599</td></tr>
+              <tr><td>Screen context &amp; region capture</td><td>—</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Offline local voice</td><td>—</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Models</td><td>Auto</td><td>Auto · V1 Flash</td><td>+ V1 · V2</td><td>+ V2 Pro</td><td>+ V2.1 · Orchestra</td></tr>
+              <tr><td>Agents mode (edit &amp; run)</td><td>—</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Presets</td><td>—</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Image / PDF / code attachments</td><td>—</td><td>—</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Background autonomous agents</td><td>—</td><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Desktop automation</td><td>—</td><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Daily message limit</td><td>50</td><td>50</td><td>200</td><td>600</td><td>Unlimited</td></tr>
+              <tr><td>Priority routing &amp; early access</td><td>—</td><td>—</td><td>—</td><td>—</td><td>✓</td></tr>
+              <tr><td>Support</td><td>Community</td><td>Community</td><td>Email</td><td>Priority</td><td>Direct (M4sh3r)</td></tr>
             </tbody>
           </table>
         </div>

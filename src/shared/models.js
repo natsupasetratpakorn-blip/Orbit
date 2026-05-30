@@ -65,6 +65,8 @@ export const PRESETS = [
   { id: "general", label: "General", icon: "✦", desc: "Balanced everyday assistant" },
   { id: "studying", label: "Studying", icon: "✎", desc: "Patient tutor that explains and quizzes" },
   { id: "coding", label: "Coding", icon: "⌘", desc: "Senior software engineer" },
+  { id: "interviewer", label: "Interviewer", icon: "❓", desc: "Socratic questioner to test your knowledge" },
+  { id: "creator", label: "Creator", icon: "🛠️", desc: "Creative builder and brainstormer" },
   { id: "math", label: "Math", icon: "∑", desc: "Rigorous step-by-step problem solver" },
   { id: "writing", label: "Writing", icon: "✍", desc: "Editor for clear, polished prose" }
 ];

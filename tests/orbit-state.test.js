@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   addMessageToActiveChat,
+  createOrbitDataExport,
   createDefaultOrbitState,
   createNewChat,
+  readOrbitDataImport,
   updateActiveChatMemory,
   selectProject
 } from "../src/shared/orbit-state.js";
@@ -84,5 +86,16 @@ describe("orbit mission control state", () => {
 
     expect(next.activeProjectId).toBe("project-outer-planets");
     expect(next.activeChatId).toBe("chat-neptune");
+  });
+
+  it("wraps and unwraps exportable Orbit data", () => {
+    const state = createDefaultOrbitState();
+    const payload = createOrbitDataExport(state, "2026-05-30T00:00:00.000Z");
+
+    expect(payload.version).toBe(1);
+    expect(payload.exportedAt).toBe("2026-05-30T00:00:00.000Z");
+    expect(readOrbitDataImport(payload)).toEqual(state);
+    expect(readOrbitDataImport(state)).toEqual(state);
+    expect(() => readOrbitDataImport({ nope: true })).toThrow("Invalid Orbit data export");
   });
 });

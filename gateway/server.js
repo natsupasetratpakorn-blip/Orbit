@@ -11,6 +11,7 @@ import express from "express";
 import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { GoogleAuth } from "google-auth-library";
 import { PLANS, LICENSES, MODEL_IDS, DEFAULT_MODEL_ID } from "./config.js";
 
@@ -47,6 +48,66 @@ function bump(key) {
   if (!usage[key] || usage[key].date !== d) usage[key] = { date: d, count: 0 };
   usage[key].count += 1;
   saveUsage();
+}
+
+// ─── System-instruction context caching ─────────────────────────────────────
+// The Orbit system prompt is large (multiple KB) and stable within a user's
+// session. We register it once as a Vertex cachedContents resource and then
+// reference it by name on later turns, so its tokens bill at the cheaper cached
+// rate instead of being re-sent in full every request. Keyed by a hash of the
+// prompt text + model, so each user's prompt naturally gets its own cache and
+// reuses it across their turns. Every failure path leaves the request untouched
+// (inline systemInstruction), so caching can never break a generate call.
+const CACHE_TTL_SECONDS = 1800;          // server-side TTL: 30 min
+const CACHE_REUSE_MS = 25 * 60 * 1000;   // stop reusing ~5 min before TTL
+const MIN_CACHEABLE_CHARS = 8000;        // ~2k tokens; below this a round-trip isn't worth it
+const sysCaches = new Map();             // key -> { name, expiresAt }
+const cacheUnsupported = new Set();      // modelIds that rejected caching (don't retry)
+
+function systemTextFromBody(body) {
+  const parts = body?.systemInstruction?.parts;
+  if (!Array.isArray(parts)) return "";
+  return parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
+}
+
+async function getOrCreateSystemCache({ host, modelId, systemText, token }) {
+  if (cacheUnsupported.has(modelId)) return null;
+  const now = Date.now();
+  const hash = crypto.createHash("sha256").update(`${modelId}\n${systemText}`).digest("hex");
+  const key = `${modelId}:${hash}`;
+  const hit = sysCaches.get(key);
+  if (hit && hit.expiresAt > now) return hit.name;
+  for (const [k, v] of sysCaches) { if (v.expiresAt <= now) sysCaches.delete(k); }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(
+      `https://${host}/v1/projects/${PROJECT}/locations/${LOCATION}/cachedContents`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: `projects/${PROJECT}/locations/${LOCATION}/publishers/google/models/${modelId}`,
+          systemInstruction: { parts: [{ text: systemText }] },
+          ttl: `${CACHE_TTL_SECONDS}s`
+        }),
+        signal: controller.signal
+      }
+    );
+    if (!res.ok) {
+      if (res.status === 400 || res.status === 404) cacheUnsupported.add(modelId);
+      return null;
+    }
+    const data = await res.json();
+    if (!data?.name) return null;
+    sysCaches.set(key, { name: data.name, expiresAt: now + CACHE_REUSE_MS });
+    return data.name;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function planFor(key) {
@@ -109,12 +170,25 @@ app.post("/v1/generate", async (req, res) => {
   const endpoint = stream ? "streamGenerateContent?alt=sse" : "generateContent";
   const url = `https://${host}/v1/projects/${PROJECT}/locations/${LOCATION}/publishers/google/models/${modelId}:${endpoint}`;
 
+  // Serve the (large, mostly-stable) system prompt from a context cache when we
+  // can. On a hit we swap the inline systemInstruction for a cachedContent
+  // reference, which Vertex requires to be sent WITHOUT a systemInstruction.
+  const body = req.body || {};
+  const systemText = systemTextFromBody(body);
+  if (systemText.length >= MIN_CACHEABLE_CHARS) {
+    const cacheName = await getOrCreateSystemCache({ host, modelId, systemText, token });
+    if (cacheName) {
+      body.cachedContent = cacheName;
+      delete body.systemInstruction;
+    }
+  }
+
   let upstream;
   try {
     upstream = await fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(req.body || {})
+      body: JSON.stringify(body)
     });
   } catch (e) {
     return res.status(502).json({ error: "vertex request failed: " + e.message });

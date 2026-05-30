@@ -83,15 +83,55 @@ export function mergeUserFacts(existing = [], incoming = [], cap = MAX_USER_FACT
 
 // Build the system-prompt block that injects what the model "remembers". Empty
 // string when there's nothing to add, so it costs zero tokens on fresh chats.
-export function buildMemoryBlock({ userFacts = [], conversationSummary = "" } = {}) {
+export function cleanMessagesForAI(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((m) => {
+      if (!m || m.pending || m.streaming) return false;
+      if (m.role !== "user" && m.role !== "assistant") return false;
+      return typeof m.content === "string" && m.content.trim();
+    })
+    .map((m) => ({ role: m.role, content: m.content }));
+}
+
+export function buildChatContextPayload(chat = {}, { projectMemory = "" } = {}) {
+  const clean = cleanMessagesForAI(chat?.messages);
+  const summarizedCount = Number.isInteger(chat?.summarizedCount) && chat.summarizedCount >= 0
+    ? chat.summarizedCount
+    : 0;
+
+  return {
+    messages: unsummarizedTail(clean, summarizedCount),
+    conversationSummary: typeof chat?.conversationSummary === "string" ? chat.conversationSummary : "",
+    projectMemory: typeof projectMemory === "string" ? projectMemory.trim() : ""
+  };
+}
+
+export function messageNeedsScreen(text) {
+  const t = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (/\b(my screen|on screen|on-screen|the screen|my desktop|this screenshot|the screenshot|this image|the image|what app|which app|what window|currently (open|showing|on|displayed))\b/.test(t)) {
+    return true;
+  }
+
+  const actionRef = /\b(read|explain|fix|solve|translate|summari[sz]e|describe|inspect|look at|what does)\b/.test(t);
+  const deicticRef = /\b(this|that|these|those|here|shown|visible|above|below|selected|highlighted)\b/.test(t);
+  const visualSubject = /\b(error|bug|code|page|window|image|picture|screenshot|question|problem|text|line|button|ui|screen)\b/.test(t);
+  return actionRef && (deicticRef || visualSubject);
+}
+
+export function buildMemoryBlock({ userFacts = [], conversationSummary = "", projectMemory = "" } = {}) {
   const facts = (Array.isArray(userFacts) ? userFacts : []).map((f) => String(f || "").trim()).filter(Boolean);
   const summary = String(conversationSummary || "").trim();
-  if (facts.length === 0 && !summary) return "";
+  const project = String(projectMemory || "").trim();
+  if (facts.length === 0 && !summary && !project) return "";
 
   const lines = ["\n\n## MEMORY (what you already know — use it, don't re-ask)"];
   if (facts.length > 0) {
     lines.push("", "What you know about this user (persists across sessions):");
     for (const f of facts) lines.push(`- ${f}`);
+  }
+  if (project) {
+    lines.push("", "Project memory (persists for the active project):", project);
   }
   if (summary) {
     lines.push(

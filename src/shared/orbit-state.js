@@ -26,6 +26,7 @@ export function createDefaultOrbitState(now = DEFAULT_TIME) {
       {
         id: projectId,
         name: "Solar System Survey",
+        projectMemory: "",
         updatedAt: now,
         chats: [
           createChat({ id: chatId, title: "Voyager AI", createdAt: now })
@@ -121,4 +122,20 @@ export function getActiveProject(state) {
 export function getActiveChat(state) {
   const project = getActiveProject(state);
   return project?.chats.find((chat) => chat.id === state.activeChatId) ?? null;
+}
+
+export function createOrbitDataExport(state, exportedAt = new Date().toISOString()) {
+  return {
+    version: 1,
+    exportedAt,
+    state
+  };
+}
+
+export function readOrbitDataImport(value) {
+  const candidate = value && typeof value === "object" && value.state ? value.state : value;
+  if (!candidate || typeof candidate !== "object" || !Array.isArray(candidate.projects)) {
+    throw new Error("Invalid Orbit data export");
+  }
+  return candidate;
 }

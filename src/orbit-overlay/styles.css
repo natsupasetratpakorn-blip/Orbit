@@ -810,6 +810,28 @@ select {
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
 }
 
+/* Weld a multi-step assistant turn into one visual bubble. A web_search / tool
+   card and the follow-up answer are separate messages internally, so they
+   render as back-to-back .message-assistant bubbles. Square the touching
+   corners, cancel the flex gap between them, and drop the repeated "Orbit"
+   header on every assistant bubble that directly follows another so the whole
+   turn reads as a single bubble. */
+.message-assistant:has(+ .message-assistant) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+  padding-bottom: 6px;
+}
+.message-assistant + .message-assistant {
+  margin-top: -12px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  padding-top: 6px;
+}
+.message-assistant + .message-assistant > .message-meta {
+  display: none;
+}
+
 .message.is-pending {
   border-style: dashed;
   opacity: 0.78;
@@ -995,6 +1017,109 @@ select {
 .code-copy-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text);
+}
+
+.inline-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.inline-tool-row-stream {
+  display: inline-flex;
+  margin-left: 0;
+  vertical-align: middle;
+}
+
+.inline-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.inline-tool-badge.is-live {
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.08), 0 0 20px rgba(56, 189, 248, 0.12);
+}
+
+.inline-tool-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--gemini-cyan);
+  flex: 0 0 auto;
+}
+
+.inline-tool-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.thinking-block {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.thinking-block summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.thinking-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--gemini-cyan);
+  animation: thinking-spin 900ms linear infinite;
+}
+
+.thinking-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--gemini-cyan);
+}
+
+.thinking-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.thinking-body {
+  padding: 0 10px 10px;
+}
+
+@keyframes thinking-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Action Cards & Interactive Tools HUD */
@@ -2423,4 +2548,3 @@ select {
   cursor: default !important;
   box-shadow: none !important;
 }
-

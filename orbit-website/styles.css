@@ -245,6 +245,14 @@ main, .nav, .footer { position: relative; z-index: 3; }
 .agents-art i:nth-child(2){animation-delay:.15s} .agents-art i:nth-child(3){animation-delay:.3s} .agents-art i:nth-child(4){animation-delay:.45s} .agents-art i:nth-child(5){animation-delay:.6s}
 @keyframes agdot { 0%,100% { background: var(--line-2); transform: translateY(0); } 50% { background: #fff; box-shadow: 0 0 10px #fff; transform: translateY(-6px); } }
 
+/* ─── Presets ────────────────────────────────────────────────────── */
+.presets { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; }
+.preset-card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; background: var(--panel); width: calc(25% - 16px); min-width: 220px; transition: transform 240ms var(--ease), border-color 240ms, background 240ms; text-align: left; }
+.preset-card:hover { border-color: var(--line-2); background: var(--panel-2); transform: translateY(-4px); }
+.preset-icon { font-size: 24px; display: block; margin-bottom: 12px; }
+.preset-card h3 { font-size: 17px; margin-bottom: 6px; }
+.preset-card p { color: var(--muted); font-size: 14px; line-height: 1.4; }
+
 /* ─── Models ─────────────────────────────────────────────────────── */
 .models { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .model-card { border: 1px solid var(--line); border-radius: 16px; padding: 24px; background: var(--panel); transition: transform 240ms var(--ease), border-color 240ms, background 240ms; position: relative; }
@@ -442,6 +450,10 @@ body.has-reticle .reticle { display: block; }
 .stat[data-tip]:focus { outline: none; }
 
 /* ─── Interactive demo ──────────────────────────────────────────────── */
+.demo-scenario-toggle { display: flex; gap: 8px; margin-bottom: 18px; grid-column: 1 / -1; justify-content: center; }
+.scenario-btn { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-family: "Space Grotesk", sans-serif; font-size: 13.5px; transition: all 200ms ease; }
+.scenario-btn.is-active { background: #fff; color: var(--bg); border-color: #fff; }
+.scenario-btn:hover:not(.is-active) { color: var(--text); border-color: var(--line-2); }
 .demo { display: grid; grid-template-columns: 1.7fr 1fr; gap: 28px; align-items: stretch; }
 .demo-window { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, rgba(16,16,20,0.94), rgba(8,8,11,0.94)); box-shadow: var(--shadow); display: flex; flex-direction: column; }
 .demo-screen { padding: 20px; display: flex; flex-direction: column; gap: 13px; min-height: 340px; }
@@ -484,7 +496,7 @@ body.has-reticle .reticle { display: block; }
 }
 
 /* ─── Pricing / mission plans ───────────────────────────────────────── */
-.pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; align-items: stretch; }
+.pricing { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; align-items: stretch; }
 .plan {
   position: relative; display: flex; flex-direction: column; border: 1px solid var(--line);
   border-radius: 18px; padding: 28px 24px; background: var(--panel); overflow: hidden;
@@ -518,7 +530,8 @@ body.has-reticle .reticle { display: block; }
 .plan-cta { margin-top: auto; width: 100%; }
 .pricing-note { text-align: center; margin-top: 28px; font-size: 13px; color: var(--faint); }
 
-@media (max-width: 1080px) { .pricing { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1200px) { .pricing { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 800px) { .pricing { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px) { .pricing { grid-template-columns: 1fr; } }
 
 /* Billing toggle */
@@ -539,7 +552,7 @@ body.has-reticle .reticle { display: block; }
 .compare th.compare-feat, .compare td:first-child { text-align: left; color: var(--muted); }
 .compare td:first-child { color: var(--text); font-weight: 500; }
 .compare tbody tr:hover { background: rgba(255,255,255,0.025); }
-.compare th:nth-child(3), .compare td:nth-child(3) { background: rgba(255,255,255,0.04); } /* highlight Orbit column */
+.compare th:nth-child(4), .compare td:nth-child(4) { background: rgba(255,255,255,0.04); } /* highlight Orbit column */
 .compare td { color: var(--muted); }
 
 /* FAQ */
